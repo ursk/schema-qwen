@@ -49,6 +49,7 @@ def fold_segment(ns, seg, check=True, max_report=6):
     """
     state = ns["init_state"]([row[:] for row in seg["start"]["grid"]])
     mismatches = []
+    bad_xy = set()
     checked = 0
     prev_level = seg["start"]["level"]
     prev_grid = seg["start"]["grid"]
@@ -81,6 +82,7 @@ def fold_segment(ns, seg, check=True, max_report=6):
                             if pred[y][x] != real[y][x]:
                                 b = prev_grid[y][x]
                                 bad.append((x, y, b, pred[y][x], real[y][x]))
+                                bad_xy.add((x, y))
                                 if real[y][x] == b:
                                     over += 1     # model changed a cell reality left alone
                                 elif pred[y][x] == b:
@@ -105,15 +107,17 @@ def fold_segment(ns, seg, check=True, max_report=6):
                     mismatches.append({"step_i": ev["i"], "kind": "grid", "n_cells": len(bad)})
         prev_level = ev["level"]
         prev_grid = ev["grid"]
-    return state, mismatches, checked
+    return state, mismatches, checked, bad_xy
 
 
 def cmd_backtest(ns, segments):
     total_checked, all_mismatches = 0, []
+    all_bad_xy = set()
     for seg in segments:
-        _, mm, checked = fold_segment(ns, seg)
+        _, mm, checked, bad_xy = fold_segment(ns, seg)
         total_checked += checked
         all_mismatches.extend(mm)
+        all_bad_xy |= bad_xy
     return {
         "ok": len(all_mismatches) == 0,
         "transitions_checked": total_checked,
@@ -121,6 +125,9 @@ def cmd_backtest(ns, segments):
         "n_mismatches": len(all_mismatches),
         "total_wrong_cells": sum(m.get("n_cells", 0) for m in all_mismatches)
         + sum(50 for m in all_mismatches if m.get("kind") == "goal"),
+        "n_goal_misses": sum(1 for m in all_mismatches if m.get("kind") == "goal"),
+        "n_bad_cells": len(all_bad_xy),
+        "bad_cells": sorted(all_bad_xy)[:64],
     }
 
 
@@ -130,7 +137,7 @@ def cmd_bfs(ns, segments, args):
     max_nodes = int(args.get("max_nodes", 150000))
     max_depth = int(args.get("max_depth", 120))
     seg = segments[-1]
-    start, _, _ = fold_segment(ns, seg, check=False)
+    start, _, _, _ = fold_segment(ns, seg, check=False)
 
     def expand(state):
         acts = list(actions)
@@ -177,7 +184,7 @@ def cmd_predict(ns, segments, args):
     """Predict grids for a plan from the current state (for execution checks)."""
     plan = args["plan"]
     seg = segments[-1]
-    state, _, _ = fold_segment(ns, seg, check=False)
+    state, _, _, _ = fold_segment(ns, seg, check=False)
     grids, goals = [], []
     for a in plan:
         if a == "RESET":

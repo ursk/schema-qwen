@@ -28,17 +28,19 @@ class LLM:
         self.client = httpx.Client(timeout=600)
         self.calls = 0
 
-    def chat(self, messages, on_delta=None):
+    def chat(self, messages, on_delta=None, seed=None, temperature=None):
         """Returns {"text", "chunks", "retries"}. chunks ~ generated tokens."""
         self.calls += 1
         payload = {
             "model": self.model,
             "messages": messages,
             "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
+            "temperature": self.temperature if temperature is None else temperature,
             "stream": True,
             "chat_template_kwargs": {"enable_thinking": False},
         }
+        if seed is not None:
+            payload["seed"] = seed
         last_err = None
         for attempt in range(5):
             try:
@@ -56,15 +58,23 @@ class LLM:
         """n concurrent samples (the backend batches them). on_deltas(i, chunk).
 
         Returns a list of n result dicts (None where a sample failed hard).
+
+        Distinct per-sample seeds + a small temperature ladder: the backend
+        seeds identically per request otherwise, and n identical samples make
+        best-of-N a no-op (observed: sample_tokens [5658, 5658, 5658, 5658]).
         """
+        import random
         import threading
 
+        base_seed = random.randrange(1 << 30)
         results = [None] * n
         def work(i):
             try:
                 results[i] = self.chat(
                     messages,
                     (lambda c, i=i: on_deltas(i, c)) if on_deltas else None,
+                    seed=base_seed + i,
+                    temperature=min(1.0, self.temperature + 0.1 * i),
                 )
             except Exception:
                 results[i] = None
@@ -183,6 +193,17 @@ def _is_looping(text, min_repeats=4):
             for k in range(min_repeats)
         ):
             return True
+    # newline-free enumeration runaway ("... for y=105 ... for y=106 ..."):
+    # a 32-char shingle repeated >=10x in the last 3000 chars. Threshold is high
+    # so legitimately repetitive code (grid-drawing loops) doesn't trip it.
+    tail = text[-3000:]
+    if len(tail) >= 2000:
+        counts = {}
+        for j in range(0, len(tail) - 32):
+            sh = tail[j:j + 32]
+            counts[sh] = counts.get(sh, 0) + 1
+            if counts[sh] >= 10:
+                return True
     return False
 
 
@@ -212,14 +233,53 @@ class Agent:
         self.recent_events = []  # (action, summary) since last context rebuild
         self.best_path = self.run_dir / "world_model_best.py"
         self.best_score = None  # lowest total_wrong_cells seen
+        self.best_scored_len = -1  # action_count when best_score was computed
         self.last_score = None  # score of the currently saved world_model.py
+        self.tolerated = set()  # (x,y) cells the current model is known-wrong on
+        self.near_green = False  # RED but confined to a few tolerated cells
         if self.best_path.exists() and self.timeline.events:
             # resumed run: re-score the saved best so it isn't clobbered
-            rep = run_worker("backtest", self.best_path, self.timeline.path)
-            if rep.get("ok"):
-                self.best_score = 0
-            elif rep.get("total_wrong_cells") is not None:
-                self.best_score = rep["total_wrong_cells"]
+            self._rescore_best()
+        if self.model_path.exists() and self.timeline.events:
+            # resumed run: evaluate the current model so green/near-green
+            # status (and PLAN availability) survives the restart
+            rep = run_worker("backtest", self.model_path, self.timeline.path)
+            self.backtest_green = bool(rep.get("ok"))
+            n_bad = rep.get("n_bad_cells")
+            self.near_green = bool(
+                not self.backtest_green and n_bad
+                and n_bad <= self.TOLERATE_MAX_CELLS and not rep.get("n_goal_misses")
+            )
+            self.tolerated = (
+                {tuple(c) for c in rep.get("bad_cells", [])} if self.near_green else set()
+            )
+            if rep.get("total_wrong_cells") is not None:
+                self.last_score = rep["total_wrong_cells"]
+
+    # near-green tolerance: a model wrong only on a handful of cells (e.g. an
+    # unmodeled HUD/counter font) may still PLAN and run multi-step COMMITs,
+    # with those cells excluded from the per-step misprediction check. Without
+    # this a 2-cell cosmetic mismatch locks the agent out of BFS entirely
+    # (observed: Opus spent a whole run unable to PLAN over a counter glyph).
+    TOLERATE_MAX_CELLS = 12
+
+    def _rescore_best(self):
+        """Champion scores are history-relative — re-score when history grew.
+
+        Without this, 'WORSE than your best (X vs Y)' compares a fresh score
+        against one computed on a shorter timeline (observed: champion '182'
+        was actually 668 on the full history).
+        """
+        if not self.best_path.exists():
+            return
+        if self.best_scored_len == self.timeline.action_count:
+            return
+        rep = run_worker("backtest", self.best_path, self.timeline.path)
+        if rep.get("ok"):
+            self.best_score = 0
+        elif rep.get("total_wrong_cells") is not None:
+            self.best_score = rep["total_wrong_cells"]
+        self.best_scored_len = self.timeline.action_count
 
     def trace(self, text):
         self._trace_f.write(text)
@@ -242,7 +302,9 @@ class Agent:
 
     def _on_deltas(self, i, chunk):
         with self._gen_lock:
-            self._gen_tokens += 1
+            # streamed deltas are ~1 token; the CC adapter delivers the whole
+            # reply as one chunk, so estimate by length there
+            self._gen_tokens += 1 if len(chunk) <= 8 else max(1, len(chunk) // 4)
             now = time.time()
             throttle = now - self._live_last > 0.5
             if throttle:
@@ -279,6 +341,8 @@ class Agent:
             parts.append("RECENT TRANSITIONS (newest last):\n" + "\n".join(lines))
         bt = ("no world model yet" if not wm else
               "GREEN (reproduces all recorded transitions)" if self.backtest_green
+              else f"NEAR-GREEN ({len(self.tolerated)} unmodeled cells tolerated — "
+                   f"PLAN allowed)" if self.near_green
               else "RED (has mismatches — fix before planning)")
         parts.append(
             f"GAME STATUS: level {self.env.level}/{self.env.win_levels} · "
@@ -314,17 +378,29 @@ class Agent:
         self.backtest_green = bool(rep.get("ok"))
         self.log("backtest", rep)
         if self.backtest_green:
+            self.tolerated = set()
+            self.near_green = False
             return (f"world_model.py saved. backtest GREEN: "
                     f"{rep.get('transitions_checked', 0)} recorded transitions reproduced exactly. "
                     f"You may PLAN now.")
         if "error" in rep:
             return f"world_model.py saved, but backtest FAILED to run:\n{rep['error']}"
+        n_bad = rep.get("n_bad_cells")
+        self.near_green = bool(
+            n_bad and n_bad <= self.TOLERATE_MAX_CELLS
+            and not rep.get("n_goal_misses")
+        )
+        self.tolerated = (
+            {tuple(c) for c in rep.get("bad_cells", [])} if self.near_green else set()
+        )
         score = rep.get("total_wrong_cells")
         self.last_score = score
+        self._rescore_best()
         score_note = ""
         if score is not None:
             if self.best_score is None or score < self.best_score:
                 self.best_score = score
+                self.best_scored_len = self.timeline.action_count
                 self.best_path.write_text(code)
                 score_note = f"This is your BEST model so far ({score} wrong cells total)."
             else:
@@ -333,6 +409,14 @@ class Agent:
         mm = rep.get("mismatches", [])
         lines = [f"world_model.py saved. backtest RED: {rep.get('n_mismatches')} mismatching "
                  f"transitions out of {rep.get('transitions_checked')}. {score_note} First mismatches:"]
+        if self.near_green:
+            cells = ", ".join(f"({x},{y})" for x, y in sorted(self.tolerated))
+            lines.append(
+                f"NEAR-GREEN: all mismatches are confined to {n_bad} cell(s) [{cells}]. "
+                f"The harness now treats these cells as UNMODELED: PLAN is allowed, and "
+                f"plan execution ignores mispredictions on exactly these cells. "
+                f"Modeling them properly is still better (they may encode the goal)."
+            )
         for m in mm:
             if m.get("kind") == "grid":
                 lines.append(f"- step {m.get('step_i')} (action {m.get('action')}): "
@@ -352,7 +436,7 @@ class Agent:
     def do_plan(self):
         if not self.world_model():
             return "No world model yet — write one first."
-        if not self.backtest_green:
+        if not self.backtest_green and not self.near_green:
             return "Backtest is RED — a plan inside a wrong model is worthless. Fix the model first."
         args = {"actions": [a for a in self.env.available_actions if a in {"1", "2", "3", "4", "5", "7"}]}
         rep = run_worker("bfs", self.model_path, self.timeline.path, args)
@@ -372,7 +456,7 @@ class Agent:
     def do_commit(self, actions):
         """Execute actions; with a green model, per-step prediction check."""
         predicted = None
-        if self.backtest_green and "RESET" not in actions:
+        if (self.backtest_green or self.near_green) and "RESET" not in actions:
             rep = run_worker("predict", self.model_path, self.timeline.path, {"plan": actions})
             if rep.get("ok"):
                 predicted = rep
@@ -390,6 +474,8 @@ class Agent:
             if leveled:
                 out.append(f"[{i+1}/{len(actions)}] {a}: *** LEVEL UP -> level {ev['level']} *** (new level grid shown below)")
                 self.backtest_green = False  # new level: model unverified against it
+                self.near_green = False
+                self.tolerated = set()
                 self.last_plan = None
                 break
             if ev["state"] == "GAME_OVER":
@@ -400,14 +486,21 @@ class Agent:
             if predicted is not None:
                 pred_grid = predicted["grids"][i]
                 if pred_grid != ev["grid"]:
-                    bad = sum(
-                        1 for y in range(64) for x in range(64)
+                    bad = [
+                        (x, y) for y in range(64) for x in range(64)
                         if pred_grid[y][x] != ev["grid"][y][x]
-                    )
+                    ]
+                    surprise = [c for c in bad if c not in self.tolerated]
+                    if not surprise:
+                        out.append(f"(model off only on the {len(bad)} tolerated unmodeled "
+                                   f"cell(s) this step — continuing)")
+                        continue
                     out.append(f"SURPRISE: reality differs from your model's prediction on this "
-                               f"step ({bad} cells). Plan aborted. This transition is now in the "
-                               f"timeline — fix the model so the backtest is green again.")
+                               f"step ({len(surprise)} cells beyond the tolerated set). Plan "
+                               f"aborted. This transition is now in the timeline — fix the model "
+                               f"so the backtest is green again.")
                     self.backtest_green = False
+                    self.near_green = False
                     self.last_plan = None
                     break
         result = "\n".join(out)
@@ -536,6 +629,8 @@ class Agent:
     def deliberate(self, opening_extra=""):
         """One deliberation: converse until a COMMIT executes or turns run out."""
         self.deliberation_no += 1
+        # champion score is history-relative — refresh it before any comparison
+        self._rescore_best()
         # a deliberation starts from the best-verified theory, not the last experiment
         if (self.best_path.exists() and self.best_score is not None
                 and (self.last_score is None or self.last_score > self.best_score)):
@@ -548,6 +643,7 @@ class Agent:
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": self.situation(opening_extra)},
         ]
+        consecutive_no_command = 0
         for turn in range(self.max_turns):
             self.trace(
                 f"\n\n{'═' * 78}\n═ deliberation {self.deliberation_no} · turn {turn + 1} · "
@@ -595,6 +691,16 @@ class Agent:
             else:
                 result = ("I could not find a command in your reply. End with a python code "
                           "block, PLAN, COMMIT PLAN, or COMMIT: <actions>.")
+            # commandless spiral: repeated no-command turns never recover in-context
+            # (observed: 5 straight turns of enumeration prose). End the deliberation
+            # so the outer loop restarts with a fresh situation + probe nudge.
+            consecutive_no_command = consecutive_no_command + 1 if kind == "none" else 0
+            if consecutive_no_command >= 3:
+                self.trace("\n\n[harness]\n3 commandless turns — ending deliberation, "
+                           "fresh context next.\n")
+                self._log_turn(turn, seconds, kind, anomalies, results, result)
+                self.log("deliberation", {"result": "no-command spiral break"})
+                return None
             self.trace(f"\n\n[harness]\n{result}\n")
             self._log_turn(turn, seconds, kind, anomalies, results, result)
             messages.append({"role": "assistant", "content": reply})
