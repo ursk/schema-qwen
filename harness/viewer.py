@@ -405,13 +405,21 @@ function rollout(live, turns) {
   } else { tps.textContent = "–"; gs.textContent = "waiting for first turn"; }
   if (!turns) return;
   const T = turns.slice(-60), W = 480, H = 60;
-  const maxTok = Math.max(1, ...T.map(t => t.gen_tokens));
   const bw = W / Math.max(T.length, 20);
+  // sub-bar per sample, scaled to the token cap: a capped sample touches the top
   document.getElementById("turnbars").innerHTML = T.map((t, i) => {
-    const h = Math.max(2, t.gen_tokens / maxTok * (H - 4));
+    const cap = t.max_tokens || 4096;
+    const toks = (t.sample_tokens && t.sample_tokens.length)
+      ? t.sample_tokens : [t.gen_tokens];
+    const sw = (bw - 2) / toks.length;
     const fill = t.kind === "code" ? "var(--good)" : "var(--muted)";
-    const stroke = t.anomalies.length ? ' stroke="var(--critical)" stroke-width="1.5"' : "";
-    return `<rect x="${(i * bw + 1).toFixed(1)}" y="${(H - h - 2).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="${fill}" opacity="0.75"${stroke}><title>d${t.deliberation} t${t.turn}: ${t.gen_tokens} tok, ${t.kind}${t.anomalies.length ? " ⚠" + t.anomalies.join(",") : ""}</title></rect>`;
+    const title = `<title>d${t.deliberation} t${t.turn}: [${toks.join(", ")}] / ${cap} tok, ${t.kind}${t.anomalies.length ? " ⚠" + t.anomalies.join(",") : ""}</title>`;
+    return toks.map((tk, j) => {
+      const capped = tk >= cap - 2;
+      const h = Math.max(2, Math.min(1, tk / cap) * (H - 4));
+      const f = capped ? "var(--critical)" : fill;
+      return `<rect x="${(i * bw + 1 + j * sw).toFixed(1)}" y="${(H - h - 2).toFixed(1)}" width="${Math.max(sw - 1, 1).toFixed(1)}" height="${h.toFixed(1)}" fill="${f}" opacity="0.8">${title}</rect>`;
+    }).join("");
   }).join("");
   const maxWm = Math.max(1, ...T.map(t => t.wm_added + t.wm_removed));
   document.getElementById("wmbars").innerHTML = T.map((t, i) => {
@@ -464,10 +472,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
-        # tolerate a reverse-proxy mount prefix (e.g. tailscale serve /schema)
-        path = u.path
-        if path.startswith("/schema"):
-            path = path[len("/schema"):] or "/"
+        # route by suffix so any reverse-proxy mount prefix works (/schema, /pro, …)
+        path = "/data" if u.path.rstrip("/").endswith("/data") or u.path == "/data" else "/"
         if path == "/":
             self._send(PAGE.encode(), "text/html")
         elif path == "/data":

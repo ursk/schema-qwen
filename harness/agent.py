@@ -404,7 +404,7 @@ class Agent:
             out.append("no_command")
         return out
 
-    def _log_turn(self, turn, seconds, kind, anomalies, result_text=""):
+    def _log_turn(self, turn, seconds, kind, anomalies, results, result_text=""):
         if "timed out" in result_text:
             anomalies = anomalies + ["worker_timeout"]
         with self._gen_lock:
@@ -414,6 +414,8 @@ class Agent:
             "seconds": round(seconds, 1), "gen_tokens": toks,
             "tok_s": round(toks / max(seconds, 1e-6), 1),
             "samples": self.samples, "kind": kind,
+            "sample_tokens": [r["chunks"] if r else 0 for r in results],
+            "max_tokens": self.llm.max_tokens,
             "wm_added": self._last_wm_delta[0] if self._last_wm_delta else 0,
             "wm_removed": self._last_wm_delta[1] if self._last_wm_delta else 0,
             "anomalies": anomalies,
@@ -500,12 +502,12 @@ class Agent:
                 else:
                     result = self.do_commit(self.last_plan)
                     self.trace(f"\n\n[harness — executed in game]\n{result}\n")
-                    self._log_turn(turn, seconds, kind, anomalies, result)
+                    self._log_turn(turn, seconds, kind, anomalies, results, result)
                     return result
             elif kind == "commit":
                 result = self.do_commit(payload)
                 self.trace(f"\n\n[harness — executed in game]\n{result}\n")
-                self._log_turn(turn, seconds, kind, anomalies, result)
+                self._log_turn(turn, seconds, kind, anomalies, results, result)
                 return result
             elif kind == "revert":
                 if self.best_path.exists():
@@ -518,7 +520,7 @@ class Agent:
                 result = ("I could not find a command in your reply. End with a python code "
                           "block, PLAN, COMMIT PLAN, or COMMIT: <actions>.")
             self.trace(f"\n\n[harness]\n{result}\n")
-            self._log_turn(turn, seconds, kind, anomalies, result)
+            self._log_turn(turn, seconds, kind, anomalies, results, result)
             messages.append({"role": "assistant", "content": reply})
             messages.append({"role": "user", "content": result + "\n\nDecide your next command."})
             if sum(len(m["content"]) for m in messages) > self.char_budget:

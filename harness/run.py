@@ -26,9 +26,11 @@ def main():
     ap.add_argument("--base-url", default="http://127.0.0.1:8086/v1")
     ap.add_argument("--max-actions", type=int, default=1500)
     ap.add_argument("--max-deliberations", type=int, default=200)
-    ap.add_argument("--max-tokens", type=int, default=4096)
+    ap.add_argument("--max-tokens", type=int, default=6144)
     ap.add_argument("--samples", type=int, default=4,
                     help="candidate replies sampled per turn (best-of-N via backtest)")
+    ap.add_argument("--stop-at-level", type=int, default=None,
+                    help="stop the run once this many levels are cleared")
     ap.add_argument("--run-name", default=None)
     args = ap.parse_args()
 
@@ -61,6 +63,12 @@ def main():
         if env.state == "WIN":
             print(f"WIN after {timeline.action_count} actions, {llm.calls} llm calls")
             log("win", {"actions": timeline.action_count, "llm_calls": llm.calls})
+            break
+        if args.stop_at_level is not None and env.level >= args.stop_at_level:
+            print(f"STOP: reached level {env.level} (--stop-at-level) in "
+                  f"{timeline.action_count} actions, {llm.calls} llm calls")
+            log("stop", {"reason": f"reached level {env.level} "
+                         f"({timeline.action_count} actions, {llm.calls} llm calls)"})
             break
         if env.state == "GAME_OVER":
             env.act("RESET")
