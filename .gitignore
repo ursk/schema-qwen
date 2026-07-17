@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+# downloaded game source = the answers; agent must never see these
+environment_files/
+recordings/
+runs/
+.env
