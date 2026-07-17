@@ -55,6 +55,36 @@ log every candidate's score):
 indicts the representation itself"). That's where even Opus vs Fable diverged
 in the original post. Rungs 1–2 are about reliability, not new capability.
 
+## Decision: validate the harness with a strong model (2026-07-16)
+
+If a frontier-class model can't clear a level through our harness, the harness
+is the bottleneck, not Qwen. Implemented `cc:` models: `--model cc:opus` shells
+out per turn to headless Claude Code (`claude -p --model opus`), the same
+mechanism the nightly Opus jobs use — no API key required. Tool use disabled
+and cwd sandboxed so the model can't read the downloaded game sources.
+First validation run: LS20, `--stop-at-level 1`, 40-deliberation cap.
+(Gemini via the bridge was tried first and returned empty streamed replies —
+abandoned; the user wants Claude for this anyway.)
+
+## Parked ideas: priming the weak model (2026-07-16, not yet implemented)
+
+Two suggestions to revisit once the current ladder is measured:
+
+1. **Demonstration priming.** Show the model a worked example of successful
+   navigation — e.g. a condensed transcript of one solved level (observations,
+   probes, model revisions, the final green backtest + plan) from a strong
+   model's run or a hand-authored one. Few-shot in the system prompt, or
+   retrieval per game. Risk to manage: context budget (a full deliberation is
+   thousands of tokens) and overfitting to the demo game's mechanics.
+   The cc:opus validation runs will generate exactly this material.
+
+2. **Richer conceptual preamble.** The current system prompt explains the
+   protocol but assumes the model knows what "a computer game" is like.
+   Spell out the folk physics of grid games: avatars move under directional
+   actions, walls block, counters/budgets tick, touching special tiles
+   triggers effects, levels end on reaching a goal configuration. Cheap to
+   try; measurable as fewer wasted probes in the first two deliberations.
+
 ## Decision: observability on the dashboard (2026-07-16)
 
 To tell at a glance whether the model is progressing or stuck: per-turn

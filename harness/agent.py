@@ -104,6 +104,64 @@ class LLM:
         return "".join(chunks), len(chunks)
 
 
+class ClaudeCLI:
+    """LLM adapter that shells out to headless Claude Code (`claude -p`),
+    the same way the nightly Opus jobs fire — no API key needed.
+
+    Tool use is disabled and cwd is an empty sandbox so the model cannot read
+    the downloaded game sources. No streaming: on_delta gets the whole reply.
+    """
+
+    def __init__(self, model="opus", max_tokens=8192, temperature=None):
+        import subprocess
+        import tempfile
+        self._subprocess = subprocess
+        self.model = model
+        self.max_tokens = max_tokens  # informational; CC manages its own budget
+        self.calls = 0
+        self.sandbox = tempfile.mkdtemp(prefix="schema-cc-")
+
+    @staticmethod
+    def _flatten(messages):
+        parts = []
+        for m in messages:
+            role = {"system": "SYSTEM INSTRUCTIONS", "user": "HARNESS",
+                    "assistant": "YOUR PREVIOUS REPLY"}[m["role"]]
+            parts.append(f"=== {role} ===\n{m['content']}")
+        parts.append("Answer directly in plain text following the system instructions. "
+                     "Do not use any tools.")
+        return "\n\n".join(parts)
+
+    def chat(self, messages, on_delta=None):
+        self.calls += 1
+        for attempt in range(3):
+            try:
+                proc = self._subprocess.run(
+                    ["claude", "-p", "--model", self.model,
+                     "--output-format", "text", "--max-turns", "1",
+                     "--disallowedTools",
+                     "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,Task,Agent,NotebookEdit"],
+                    input=self._flatten(messages), capture_output=True,
+                    text=True, cwd=self.sandbox, timeout=1200,
+                )
+                text = proc.stdout.strip()
+                if text:
+                    if on_delta:
+                        on_delta(text)
+                    return {"text": text, "chunks": max(1, len(text) // 4),
+                            "retries": attempt}
+            except self._subprocess.TimeoutExpired:
+                pass
+            time.sleep(10 * (attempt + 1))
+        return {"text": "", "chunks": 0, "retries": 3}
+
+    def chat_n(self, messages, n, on_deltas=None):
+        return [
+            self.chat(messages, (lambda c, i=i: on_deltas(i, c)) if on_deltas else None)
+            for i in range(n)
+        ]
+
+
 def _is_looping(text, min_repeats=4):
     """Detect degenerate repetition: the tail is the same 1-4 line block repeated."""
     lines = [ln for ln in text.splitlines() if ln.strip()][-24:]

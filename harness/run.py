@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .agent import Agent, LLM
+from .agent import Agent, ClaudeCLI, LLM
 from .envio import BudgetExceeded, Env
 from .timeline import Timeline
 
@@ -45,7 +45,11 @@ def main():
 
     timeline = Timeline(run_dir / "timeline.jsonl")
     env = Env(args.game, timeline, max_actions=args.max_actions)
-    llm = LLM(args.base_url, args.model, max_tokens=args.max_tokens)
+    if args.model.startswith("cc:"):
+        # cc:opus etc — headless Claude Code, like the nightly Opus jobs
+        llm = ClaudeCLI(args.model[3:], max_tokens=args.max_tokens)
+    else:
+        llm = LLM(args.base_url, args.model, max_tokens=args.max_tokens)
     agent = Agent(env, timeline, llm, run_dir, log, samples=args.samples)
 
     env.reset()
