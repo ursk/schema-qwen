@@ -51,6 +51,7 @@ def fold_segment(ns, seg, check=True, max_report=6):
     mismatches = []
     checked = 0
     prev_level = seg["start"]["level"]
+    prev_grid = seg["start"]["grid"]
     for ev in seg["steps"]:
         state = ns["step"](state, parse_action(ev["action"]))
         if not check:
@@ -73,23 +74,37 @@ def fold_segment(ns, seg, check=True, max_report=6):
             real = ev["grid"]
             if pred != real:
                 bad = []
+                over = missed = wrong = 0
                 for y in range(64):
                     if pred[y] != real[y]:
                         for x in range(64):
                             if pred[y][x] != real[y][x]:
-                                bad.append((x, y, pred[y][x], real[y][x]))
+                                b = prev_grid[y][x]
+                                bad.append((x, y, b, pred[y][x], real[y][x]))
+                                if real[y][x] == b:
+                                    over += 1     # model changed a cell reality left alone
+                                elif pred[y][x] == b:
+                                    missed += 1   # reality changed a cell model left alone
+                                else:
+                                    wrong += 1    # both changed it, differently
                 if len(mismatches) < max_report:
                     mismatches.append({
                         "step_i": ev["i"], "action": ev["action"], "kind": "grid",
                         "n_cells": len(bad),
+                        "breakdown": (
+                            f"{over} cells your model changed but reality did NOT; "
+                            f"{missed} cells reality changed but your model did NOT; "
+                            f"{wrong} cells both changed, to different colors"
+                        ),
                         "cells": [
-                            f"({x},{y}) predicted {p} but real {r}"
-                            for x, y, p, r in bad[:12]
+                            f"({x},{y}) was {b}: predicted {p}, real {r}"
+                            for x, y, b, p, r in bad[:12]
                         ],
                     })
                 else:
                     mismatches.append({"step_i": ev["i"], "kind": "grid", "n_cells": len(bad)})
         prev_level = ev["level"]
+        prev_grid = ev["grid"]
     return state, mismatches, checked
 
 
@@ -104,6 +119,8 @@ def cmd_backtest(ns, segments):
         "transitions_checked": total_checked,
         "mismatches": all_mismatches[:8],
         "n_mismatches": len(all_mismatches),
+        "total_wrong_cells": sum(m.get("n_cells", 0) for m in all_mismatches)
+        + sum(50 for m in all_mismatches if m.get("kind") == "goal"),
     }
 
 

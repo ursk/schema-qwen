@@ -112,6 +112,8 @@ class Agent:
         self.last_plan = None
         self.backtest_green = False
         self.recent_events = []  # (action, summary) since last context rebuild
+        self.best_path = self.run_dir / "world_model_best.py"
+        self.best_score = None  # lowest total_wrong_cells seen
 
     def trace(self, text):
         self._trace_f.write(text)
@@ -167,13 +169,24 @@ class Agent:
                     f"You may PLAN now.")
         if "error" in rep:
             return f"world_model.py saved, but backtest FAILED to run:\n{rep['error']}"
+        score = rep.get("total_wrong_cells")
+        score_note = ""
+        if score is not None:
+            if self.best_score is None or score < self.best_score:
+                self.best_score = score
+                self.best_path.write_text(code)
+                score_note = f"This is your BEST model so far ({score} wrong cells total)."
+            else:
+                score_note = (f"WORSE than your best model ({score} vs {self.best_score} wrong "
+                              f"cells). Say REVERT to restore the best one.")
         mm = rep.get("mismatches", [])
         lines = [f"world_model.py saved. backtest RED: {rep.get('n_mismatches')} mismatching "
-                 f"transitions out of {rep.get('transitions_checked')}. First mismatches:"]
+                 f"transitions out of {rep.get('transitions_checked')}. {score_note} First mismatches:"]
         for m in mm:
             if m.get("kind") == "grid":
                 lines.append(f"- step {m.get('step_i')} (action {m.get('action')}): "
-                             f"{m.get('n_cells')} wrong cells; " + "; ".join(m.get("cells", [])[:6]))
+                             f"{m.get('n_cells')} wrong cells ({m.get('breakdown', '')}); "
+                             + "; ".join(m.get("cells", [])[:6]))
             else:
                 lines.append(f"- step {m.get('step_i')} (action {m.get('action')}): {m.get('detail')}")
         lines.append("Revise init_state/step/render (or is_goal) to explain these, then resubmit.")
@@ -268,6 +281,8 @@ class Agent:
             return "commit", toks
         if PLAN_RE.search(text):
             return "plan", None
+        if re.search(r"^\s*REVERT\s*$", text, re.M):
+            return "revert", None
         return "none", None
 
     @staticmethod
@@ -307,6 +322,11 @@ class Agent:
                 result = self.do_commit(payload)
                 self.trace(f"\n\n[harness — executed in game]\n{result}\n")
                 return result
+            elif kind == "revert":
+                if self.best_path.exists():
+                    result = self.do_write_model(self.best_path.read_text())
+                else:
+                    result = "There is no saved best model to revert to."
             elif kind == "error":
                 result = payload
             else:

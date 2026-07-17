@@ -59,6 +59,9 @@ Execute explicit actions, e.g. `COMMIT: 1 1 3 6@12,40 2`. Use short probes (1-3 
 actions) to test hypotheses — prefer the experiment that best separates competing \
 rules. `COMMIT: RESET` restarts the level.
 
+5. REVERT
+Restore your best-scoring world model so far (the harness tracks it).
+
 You may also include lines starting with `NOTE: ` anywhere — they are appended to \
 your persistent notes.
 
