@@ -85,6 +85,62 @@ Two suggestions to revisit once the current ladder is measured:
    triggers effects, levels end on reaching a goal configuration. Cheap to
    try; measurable as fewer wasted probes in the first two deliberations.
 
+## Validation result: Opus through the harness (2026-07-17)
+
+Run `ls20-ccopus-val`: before the CC plan quota died mid-run, Opus reached a
+world model with **2 wrong cells over 27 transitions** — block-push physics and
+the bar-budget rule solved and experimentally confirmed; residual = an
+unmodeled counter-digit font. Notes read like a lab notebook. No level clear
+yet (`is_goal` still unknown) — run resumed after quota reset. Preliminary
+verdict: **the harness is functional**; the last 10 deliberations of the
+original run were an artifact (the adapter looped on the CLI's "session limit"
+message — now detected, sleeps 20 min and retries instead).
+
+## Pressure test: tiny-model (≈1.5B) imitation → RL (2026-07-17, analysis)
+
+Proposal: math-tuned ~1.5B Qwen, imitation-learn from Opus chains, then RL.
+
+**For it:**
+1. **Dense verifiable reward.** Wrong-cell count is a continuous signal, not a
+   sparse win bit — the single biggest enabler for small-model RL.
+2. **Throughput is the tiny model's superpower.** ~1.5B runs 300+ tok/s and
+   full-finetunes on this machine: thousands of GRPO rollouts/hour, exactly
+   where 35B makes RL impractical.
+3. **Precedent.** R1-Distill-Qwen-1.5B: distilled chains + RL polish produced
+   outsized math gains; the recipe (imitate strong chains, then RL against a
+   verifier) is the user's proposal almost verbatim.
+4. The harness already carries memory, verification, and search — the model
+   only needs *local revision competence*, the narrowest slice of the task.
+
+**Against it (honest):**
+1. **The task is three capabilities bundled**: grid perception over ~4k tokens
+   of hex (weakest axis of tiny models), writing multi-mechanism Python
+   simulators (marginal at 1.5B), causal induction. Math tuning covers only
+   the third.
+2. **Context.** Our prompts are ~10k tokens; tiny-model attention quality
+   degrades well before that. Mitigation: compressed observations (RLE grid,
+   diff-only, harness-extracted object lists) — legitimate, but note it moves
+   part of *state grounding* into the harness and changes the claim.
+3. **Imitation data volume.** Opus runs yield maybe a few hundred useful
+   (situation → revision) pairs per game. Thin for teaching code-writing;
+   fine for protocol/style. **Amplifier: procedural curriculum** — arcengine
+   is installed; generate unlimited tiny games with known mechanisms, gold
+   world models, and synthesized revision chains. Infinite SFT/RL data,
+   controllable difficulty, clean provenance.
+4. **Provenance note.** Bulk-training on Claude outputs runs into Anthropic
+   usage-policy territory; the procedural-gold route avoids depending on it
+   (keep Opus chains as eval reference / small protocol-priming set).
+5. **The pass@N gate applies down-scale too.** After SFT, if pass@64 ≈ 0 on
+   *easy synthetic* games, RL cannot rescue it — abort there, cheaply.
+
+**Experiment E1 (when we commit to this):** Qwen3-1.7B base → procedural game
+generator + gold traces → SFT (synthetic chains + protocol examples) →
+Gate 1: pass@16 > 10% on held-out synthetic games → single-turn GRPO
+(reward = wrong-cell delta), curriculum over mechanism count → Gate 2: clears
+unseen synthetic games end-to-end → only then attempt the easiest real public
+game. Success at Gate 2 is already a publishable-shaped result ("a 1.5B model
+can drive a Schema-style harness"), independent of ARC-AGI-3 scores.
+
 ## Decision: observability on the dashboard (2026-07-16)
 
 To tell at a glance whether the model is progressing or stuck: per-turn

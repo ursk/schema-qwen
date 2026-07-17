@@ -207,6 +207,8 @@ footer{color:var(--muted);font-size:11px;margin-top:20px;max-width:76ch}
       </div>
     </div>
     <div>
+      <div class="card"><h2>Model output <span id="genliv" style="color:var(--good);font-weight:400;text-transform:none;letter-spacing:0"></span></h2>
+        <pre class="log" id="gentail" style="max-height:160px"></pre></div>
       <div class="card"><h2>Play-by-play</h2><pre class="log" id="feed"></pre></div>
       <div class="card"><h2>Agent notes (notes.md)</h2><pre class="log" id="notes" style="max-height:170px"></pre></div>
       <div class="card"><h2>World model (world_model.py)</h2><pre class="log" id="wm" style="max-height:240px"></pre></div>
@@ -509,6 +511,12 @@ async function poll() {
     feedCount = d.feed_count;
     chips(d.stats);
     window._kv = d.kv;
+    const gt = document.getElementById("gentail"), gl = document.getElementById("genliv");
+    const atBottom = gt.scrollHeight - gt.scrollTop - gt.clientHeight < 30;
+    gt.textContent = d.gen_tail || "";
+    if (atBottom) gt.scrollTop = gt.scrollHeight;
+    const liveNow = d.live && (Date.now() / 1000 - d.live.updated) < 6 && d.live.generating;
+    gl.textContent = liveNow ? "· streaming" : "· idle";
     rollout(d.live, d.turns);
     document.getElementById("notes").textContent = d.notes;
     document.getElementById("wm").textContent = d.world_model;
@@ -604,6 +612,12 @@ class Handler(BaseHTTPRequestHandler):
                     live = json.loads(lp.read_text())
                 except Exception:
                     live = None
+            gen_tail = ""
+            tp = RUN_DIR / "trace.log"
+            if tp.exists():
+                with open(tp, "rb") as f:
+                    f.seek(max(0, tp.stat().st_size - 2500))
+                    gen_tail = f.read().decode("utf-8", "replace")
             def read(name):
                 p = RUN_DIR / name
                 return p.read_text() if p.exists() else "(none yet)"
@@ -611,6 +625,7 @@ class Handler(BaseHTTPRequestHandler):
                 "run": RUN_DIR.name, "events": events,
                 "feed": feed, "feed_count": feed_count, "stats": stats,
                 "turns": turns[-80:], "live": live, "kv": poll_backend_metrics(),
+                "gen_tail": gen_tail,
                 "notes": read("notes.md"), "world_model": read("world_model.py"),
             }).encode()
             self._send(body, "application/json")

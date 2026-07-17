@@ -132,9 +132,11 @@ class ClaudeCLI:
                      "Do not use any tools.")
         return "\n\n".join(parts)
 
+    QUOTA_RE = re.compile(r"session limit|usage limit|rate limit", re.I)
+
     def chat(self, messages, on_delta=None):
         self.calls += 1
-        for attempt in range(3):
+        for attempt in range(24):
             try:
                 proc = self._subprocess.run(
                     ["claude", "-p", "--model", self.model,
@@ -145,6 +147,13 @@ class ClaudeCLI:
                     text=True, cwd=self.sandbox, timeout=1200,
                 )
                 text = proc.stdout.strip()
+                if text and self.QUOTA_RE.search(text[:300]):
+                    # plan quota exhausted — wait it out instead of burning turns
+                    if on_delta:
+                        on_delta(f"\n[claude quota exhausted ({text[:80]!r}) — "
+                                 f"sleeping 20 min, attempt {attempt + 1}/24]\n")
+                    time.sleep(1200)
+                    continue
                 if text:
                     if on_delta:
                         on_delta(text)
@@ -153,7 +162,7 @@ class ClaudeCLI:
             except self._subprocess.TimeoutExpired:
                 pass
             time.sleep(10 * (attempt + 1))
-        return {"text": "", "chunks": 0, "retries": 3}
+        return {"text": "", "chunks": 0, "retries": 24}
 
     def chat_n(self, messages, n, on_deltas=None):
         return [
