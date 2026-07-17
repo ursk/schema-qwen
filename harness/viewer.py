@@ -179,9 +179,11 @@ function tick() {
   if (playing) setTimeout(tick, 150);
 }
 let feedCount = 0;
+// works at / locally and under a reverse-proxy mount like /schema
+const BASE = location.pathname.replace(/\\/$/, "");
 async function poll() {
   try {
-    const r = await fetch(`/data?since=${events.length}&feed_since=${feedCount}`);
+    const r = await fetch(`${BASE}/data?since=${events.length}&feed_since=${feedCount}`);
     const d = await r.json();
     document.getElementById("title").textContent = d.run;
     if (d.events.length) {
@@ -218,9 +220,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
-        if u.path == "/":
+        # tolerate a reverse-proxy mount prefix (e.g. tailscale serve /schema)
+        path = u.path
+        if path.startswith("/schema"):
+            path = path[len("/schema"):] or "/"
+        if path == "/":
             self._send(PAGE.encode(), "text/html")
-        elif u.path == "/data":
+        elif path == "/data":
             since = int(parse_qs(u.query).get("since", ["0"])[0])
             events = []
             tl = RUN_DIR / "timeline.jsonl"
