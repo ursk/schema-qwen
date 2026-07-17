@@ -115,6 +115,13 @@ class Agent:
         self.best_path = self.run_dir / "world_model_best.py"
         self.best_score = None  # lowest total_wrong_cells seen
         self.last_score = None  # score of the currently saved world_model.py
+        if self.best_path.exists() and self.timeline.events:
+            # resumed run: re-score the saved best so it isn't clobbered
+            rep = run_worker("backtest", self.best_path, self.timeline.path)
+            if rep.get("ok"):
+                self.best_score = 0
+            elif rep.get("total_wrong_cells") is not None:
+                self.best_score = rep["total_wrong_cells"]
 
     def trace(self, text):
         self._trace_f.write(text)
