@@ -151,6 +151,12 @@ class Agent:
     # ---------- tools ----------
 
     def do_write_model(self, code):
+        old = self.world_model()
+        if old is not None and code.strip() == old.strip():
+            return ("You resubmitted the SAME world model — nothing changed, and nothing will. "
+                    "Only include a python code block when you are CHANGING the model. "
+                    "If you want to run an experiment, reply with ONLY a COMMIT line, "
+                    "e.g. `COMMIT: 2`.")
         self.model_path.write_text(code)
         rep = run_worker("backtest", self.model_path, self.timeline.path)
         self.backtest_green = bool(rep.get("ok"))
@@ -244,8 +250,13 @@ class Agent:
             with open(self.notes_path, "a") as f:
                 f.write(note + "\n")
         code_blocks = CODE_RE.findall(text)
+        # an explicit COMMIT outranks a code block that doesn't change the model
+        # (weak models love pasting the current model back while narrating a probe)
         if code_blocks:
-            return "code", code_blocks[-1]
+            wm = self.world_model()
+            changed = wm is None or code_blocks[-1].strip() != wm.strip()
+            if changed or not (COMMIT_RE.search(text) or COMMIT_PLAN_RE.search(text)):
+                return "code", code_blocks[-1]
         if COMMIT_PLAN_RE.search(text):
             return "commit_plan", None
         m = COMMIT_RE.search(text)

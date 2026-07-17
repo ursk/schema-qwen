@@ -74,6 +74,9 @@ re-verify, re-plan.
 - Keep step() and render() FAST (they run thousands of times in search) and \
 deterministic. No imports beyond the Python stdlib; no randomness; no I/O.
 
+Only include a python code block when you are CHANGING the model — never paste the \
+current model back unchanged. To run an experiment, reply with only the COMMIT line.
+
 Be brief in prose. Spend your effort on the code and on choosing informative probes.
 """
 
