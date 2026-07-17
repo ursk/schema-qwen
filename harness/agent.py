@@ -252,23 +252,30 @@ class Agent:
         return self.model_path.read_text() if self.model_path.exists() else None
 
     def situation(self, extra=""):
+        # ordered stable -> volatile so the backend's prefix cache survives
+        # across deliberations: static header, then append-only notes, then the
+        # slow-changing world model, then everything that changes every turn.
         cur = self.timeline.events[-1]
         parts = [
-            f"GAME STATUS: level {self.env.level}/{self.env.win_levels} · "
-            f"{self.env.state} · {self.timeline.action_count} actions taken so far",
             action_semantics(self.env.available_actions),
-            f"YOUR NOTES (notes.md):\n{self.notes()}",
+            f"YOUR NOTES (notes.md, append-only):\n{self.notes()}",
         ]
         wm = self.world_model()
         if wm:
-            bt = "GREEN (reproduces all recorded transitions)" if self.backtest_green \
-                else "RED (has mismatches — fix before planning)"
-            parts.append(f"YOUR WORLD MODEL (world_model.py) — backtest {bt}:\n```python\n{wm}```")
+            parts.append(f"YOUR WORLD MODEL (world_model.py):\n```python\n{wm}```")
         else:
             parts.append("YOU HAVE NO WORLD MODEL YET.")
         if self.recent_events:
             lines = [f"  after {a}: {s}" for a, s in self.recent_events[-20:]]
             parts.append("RECENT TRANSITIONS (newest last):\n" + "\n".join(lines))
+        bt = ("no world model yet" if not wm else
+              "GREEN (reproduces all recorded transitions)" if self.backtest_green
+              else "RED (has mismatches — fix before planning)")
+        parts.append(
+            f"GAME STATUS: level {self.env.level}/{self.env.win_levels} · "
+            f"{self.env.state} · {self.timeline.action_count} actions taken so far · "
+            f"backtest {bt}"
+        )
         parts.append(f"CURRENT GRID (hex colors, x -> right, y -> down):\n{grid_to_text(cur['grid'])}")
         if extra:
             parts.append(extra)
