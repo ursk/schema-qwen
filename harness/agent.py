@@ -30,18 +30,24 @@ class LLM:
 
     def chat(self, messages):
         self.calls += 1
-        r = self.client.post(
-            f"{self.base_url}/chat/completions",
-            json={
-                "model": self.model,
-                "messages": messages,
-                "max_tokens": self.max_tokens,
-                "temperature": self.temperature,
-                "chat_template_kwargs": {"enable_thinking": False},
-            },
-        )
-        r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"] or ""
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        last_err = None
+        for attempt in range(5):
+            try:
+                r = self.client.post(f"{self.base_url}/chat/completions", json=payload)
+                r.raise_for_status()
+                return r.json()["choices"][0]["message"]["content"] or ""
+            except (httpx.HTTPStatusError, httpx.TransportError) as e:
+                # local backend may crash and get relaunched by launchd — wait it out
+                last_err = e
+                time.sleep(15 * (attempt + 1))
+        raise RuntimeError(f"LLM unreachable after 5 attempts: {last_err}")
 
 
 class Agent:
