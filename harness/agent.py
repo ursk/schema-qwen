@@ -28,26 +28,70 @@ class LLM:
         self.client = httpx.Client(timeout=600)
         self.calls = 0
 
-    def chat(self, messages):
+    def chat(self, messages, on_delta=None):
         self.calls += 1
         payload = {
             "model": self.model,
             "messages": messages,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
+            "stream": True,
             "chat_template_kwargs": {"enable_thinking": False},
         }
         last_err = None
         for attempt in range(5):
             try:
-                r = self.client.post(f"{self.base_url}/chat/completions", json=payload)
-                r.raise_for_status()
-                return r.json()["choices"][0]["message"]["content"] or ""
+                return self._stream_once(payload, on_delta)
             except (httpx.HTTPStatusError, httpx.TransportError) as e:
                 # local backend may crash and get relaunched by launchd — wait it out
                 last_err = e
+                if on_delta:
+                    on_delta(f"\n[llm error, retry {attempt + 1}/5: {type(e).__name__}]\n")
                 time.sleep(15 * (attempt + 1))
         raise RuntimeError(f"LLM unreachable after 5 attempts: {last_err}")
+
+    def _stream_once(self, payload, on_delta):
+        chunks = []
+        with self.client.stream(
+            "POST", f"{self.base_url}/chat/completions", json=payload
+        ) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data.strip() == "[DONE]":
+                    break
+                try:
+                    delta = json.loads(data)["choices"][0]["delta"].get("content") or ""
+                except (KeyError, IndexError, json.JSONDecodeError):
+                    continue
+                if not delta:
+                    continue
+                chunks.append(delta)
+                if on_delta:
+                    on_delta(delta)
+                if len(chunks) % 32 == 0 and _is_looping("".join(chunks)):
+                    msg = "\n[TRUNCATED BY HARNESS: your output was repeating in a loop]"
+                    if on_delta:
+                        on_delta(msg + "\n")
+                    return "".join(chunks) + msg
+        return "".join(chunks)
+
+
+def _is_looping(text, min_repeats=4):
+    """Detect degenerate repetition: the tail is the same 1-4 line block repeated."""
+    lines = [ln for ln in text.splitlines() if ln.strip()][-24:]
+    for period in (1, 2, 3, 4):
+        if len(lines) < period * min_repeats:
+            continue
+        block = lines[-period:]
+        if all(
+            lines[-(k + 1) * period : len(lines) - k * period or None] == block
+            for k in range(min_repeats)
+        ):
+            return True
+    return False
 
 
 class Agent:
@@ -59,12 +103,18 @@ class Agent:
         self.run_dir = Path(run_dir)
         self.model_path = self.run_dir / "world_model.py"
         self.notes_path = self.run_dir / "notes.md"
+        self.trace_path = self.run_dir / "trace.log"
+        self._trace_f = open(self.trace_path, "a", buffering=1)
+        self.deliberation_no = 0
         self.log = log
         self.max_turns = max_deliberation_turns
         self.char_budget = context_char_budget
         self.last_plan = None
         self.backtest_green = False
         self.recent_events = []  # (action, summary) since last context rebuild
+
+    def trace(self, text):
+        self._trace_f.write(text)
 
     # ---------- context ----------
 
@@ -217,12 +267,18 @@ class Agent:
 
     def deliberate(self, opening_extra=""):
         """One deliberation: converse until a COMMIT executes or turns run out."""
+        self.deliberation_no += 1
         messages = [
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": self.situation(opening_extra)},
         ]
         for turn in range(self.max_turns):
-            reply = self.llm.chat(messages)
+            self.trace(
+                f"\n\n{'═' * 78}\n═ deliberation {self.deliberation_no} · turn {turn + 1} · "
+                f"level {self.env.level}/{self.env.win_levels} · "
+                f"{self.timeline.action_count} actions taken\n{'═' * 78}\n[model]\n"
+            )
+            reply = self.llm.chat(messages, on_delta=self.trace)
             self.log("llm", {"turn": turn, "reply": reply[-3000:]})
             kind, payload = self.parse(reply)
             if kind == "code":
@@ -234,15 +290,18 @@ class Agent:
                     result = "There is no stored plan. Run PLAN first."
                 else:
                     result = self.do_commit(self.last_plan)
+                    self.trace(f"\n\n[harness — executed in game]\n{result}\n")
                     return result
             elif kind == "commit":
                 result = self.do_commit(payload)
+                self.trace(f"\n\n[harness — executed in game]\n{result}\n")
                 return result
             elif kind == "error":
                 result = payload
             else:
                 result = ("I could not find a command in your reply. End with a python code "
                           "block, PLAN, COMMIT PLAN, or COMMIT: <actions>.")
+            self.trace(f"\n\n[harness]\n{result}\n")
             messages.append({"role": "assistant", "content": reply})
             messages.append({"role": "user", "content": result + "\n\nDecide your next command."})
             if sum(len(m["content"]) for m in messages) > self.char_budget:
