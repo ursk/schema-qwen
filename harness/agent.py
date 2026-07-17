@@ -474,6 +474,7 @@ class Agent:
             "samples": self.samples, "kind": kind,
             "sample_tokens": [r["chunks"] if r else 0 for r in results],
             "max_tokens": self.llm.max_tokens,
+            "prompt_chars": getattr(self, "_prompt_chars", 0),
             "wm_added": self._last_wm_delta[0] if self._last_wm_delta else 0,
             "wm_removed": self._last_wm_delta[1] if self._last_wm_delta else 0,
             "anomalies": anomalies,
@@ -541,6 +542,7 @@ class Agent:
                 self._gen_tokens = 0
                 self._gen_t0 = time.time()
             self._live_write(True)
+            self._prompt_chars = sum(len(m["content"]) for m in messages)
             results = self.llm.chat_n(messages, self.samples, on_deltas=self._on_deltas)
             self._live_write(False)
             seconds = time.time() - self._gen_t0

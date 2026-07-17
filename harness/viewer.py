@@ -11,6 +11,47 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 RUN_DIR = None
+METRICS_URL = "http://127.0.0.1:8084/metrics"
+KV_HISTORY = []  # (t, kv_gb, metal_active_gb, entries) — in-process, viewer lifetime
+
+
+def poll_backend_metrics():
+    import urllib.request
+    try:
+        with urllib.request.urlopen(METRICS_URL, timeout=0.8) as r:
+            text = r.read().decode()
+    except Exception:
+        return None
+    vals = {}
+    for line in text.splitlines():
+        if line.startswith("vllm_mlx_cache_memory_bytes "):
+            vals["kv_bytes"] = float(line.split()[-1])
+        elif line.startswith('vllm_mlx_metal_memory_bytes{kind="active"}'):
+            vals["metal_active"] = float(line.split()[-1])
+        elif line.startswith('vllm_mlx_metal_memory_bytes{kind="peak"}'):
+            vals["metal_peak"] = float(line.split()[-1])
+        elif line.startswith("vllm_mlx_cache_entry_count"):
+            vals["entries"] = float(line.split()[-1])
+        elif line.startswith("vllm_mlx_cache_hits"):
+            vals["hits"] = float(line.split()[-1])
+        elif line.startswith("vllm_mlx_cache_misses"):
+            vals["misses"] = float(line.split()[-1])
+    if not vals:
+        return None
+    import time as _t
+    gb = 1024 ** 3
+    m = {
+        "kv_gb": round(vals.get("kv_bytes", 0) / gb, 2),
+        "metal_active_gb": round(vals.get("metal_active", 0) / gb, 1),
+        "metal_peak_gb": round(vals.get("metal_peak", 0) / gb, 1),
+        "entries": int(vals.get("entries", 0)),
+        "hit_rate": round(vals.get("hits", 0) /
+                          max(vals.get("hits", 0) + vals.get("misses", 0), 1), 2),
+    }
+    KV_HISTORY.append((_t.time(), m["kv_gb"], m["metal_active_gb"], m["entries"]))
+    del KV_HISTORY[:-240]
+    m["history"] = [{"t": h[0], "kv_gb": h[1], "metal_gb": h[2]} for h in KV_HISTORY]
+    return m
 
 
 def humanize(e):
@@ -156,6 +197,10 @@ footer{color:var(--muted);font-size:11px;margin-top:20px;max-width:76ch}
              style="width:100%;height:60px;background:var(--page);border:1px solid var(--border);border-radius:6px"></svg>
         <div class="meta" style="margin-top:6px">world-model lines added/removed per turn</div>
         <svg id="wmbars" viewBox="0 0 480 40" preserveAspectRatio="none"
+             style="width:100%;height:40px;background:var(--page);border:1px solid var(--border);border-radius:6px"></svg>
+        <div class="meta" style="margin-top:8px">backend memory — KV cache (blue) · Metal active (gray), GB
+          <span id="kvchips"></span></div>
+        <svg id="kvspark" viewBox="0 0 480 40" preserveAspectRatio="none"
              style="width:100%;height:40px;background:var(--page);border:1px solid var(--border);border-radius:6px"></svg>
         <div class="meta" style="margin-top:8px">anomalies</div>
         <pre class="log" id="anoms" style="max-height:110px"></pre>
@@ -392,6 +437,19 @@ function tick() {
 let feedCount = 0;
 // works at / locally and under a reverse-proxy mount like /schema
 const BASE = location.pathname.replace(/\\/$/, "");
+function renderKv(kv) {
+  const chips = document.getElementById("kvchips"), svg = document.getElementById("kvspark");
+  if (!kv) { chips.textContent = " · backend metrics unavailable"; svg.innerHTML = ""; return; }
+  chips.textContent = ` · KV ${kv.kv_gb} GB · Metal ${kv.metal_active_gb}/${kv.metal_peak_gb} GB peak · ${kv.entries} entries · hit ${Math.round(kv.hit_rate * 100)}%`;
+  const H = kv.history || [];
+  if (H.length < 2) { svg.innerHTML = ""; return; }
+  const W = 480, HT = 40, maxG = Math.max(8, ...H.map(h => h.metal_gb));
+  const pts = key => H.map((h, i) =>
+    `${(i / (H.length - 1) * W).toFixed(1)},${(HT - 2 - (h[key] / maxG) * (HT - 6)).toFixed(1)}`).join(" ");
+  svg.innerHTML =
+    `<polyline points="${pts("metal_gb")}" fill="none" stroke="var(--muted)" stroke-width="1.5" opacity="0.7"/>` +
+    `<polyline points="${pts("kv_gb")}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>`;
+}
 function rollout(live, turns) {
   const tps = document.getElementById("tps"), gs = document.getElementById("genstat");
   const fresh = live && (Date.now() / 1000 - live.updated) < 6;
@@ -428,6 +486,7 @@ function rollout(live, turns) {
            `<rect x="${(i * bw + 1).toFixed(1)}" y="20" width="${(bw - 2).toFixed(1)}" height="${hr.toFixed(1)}" fill="var(--critical)" opacity="0.6"></rect>`;
   }).join("");
   const an = turns.filter(t => t.anomalies.length).slice(-8);
+  renderKv(window._kv);
   document.getElementById("anoms").textContent = an.length
     ? an.map(t => `d${t.deliberation} turn ${t.turn}: ${t.anomalies.join(", ")}`).join("\\n")
     : "none";
@@ -449,6 +508,7 @@ async function poll() {
     }
     feedCount = d.feed_count;
     chips(d.stats);
+    window._kv = d.kv;
     rollout(d.live, d.turns);
     document.getElementById("notes").textContent = d.notes;
     document.getElementById("wm").textContent = d.world_model;
@@ -550,7 +610,7 @@ class Handler(BaseHTTPRequestHandler):
             body = json.dumps({
                 "run": RUN_DIR.name, "events": events,
                 "feed": feed, "feed_count": feed_count, "stats": stats,
-                "turns": turns[-80:], "live": live,
+                "turns": turns[-80:], "live": live, "kv": poll_backend_metrics(),
                 "notes": read("notes.md"), "world_model": read("world_model.py"),
             }).encode()
             self._send(body, "application/json")
