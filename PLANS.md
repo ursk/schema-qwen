@@ -151,3 +151,38 @@ token-budget exhaustion, worker timeouts, no-command turns, LLM retries).
 Rationale: every stall we've debugged so far (runaway loop, resubmit loop,
 theorize-on-thin-data) was visible in exactly these signals before it was
 visible in scores.
+
+## Post-mortem: the 2026-07-17 "everything is broken" morning
+
+What the user saw: Opus stopped playing and never finished the level; Qwen
+kept playing but with no sensible moves and no hypothesis. Diagnosis:
+
+1. **Opus didn't stop — it hit the resume's 30-deliberation cap** (11:52),
+   after losing 4.4 h to a second quota window (the guard slept correctly and
+   resumed at 11:29). Relaunched with `--max-deliberations 100`.
+2. **A 2-cell cosmetic mismatch disabled planning all run.** LS20's live
+   move-counter font is effectively unmodelable; strict certify-then-plan
+   meant PLAN was never available and every multi-step COMMIT aborted on those
+   cells. Fix: NEAR-GREEN tolerance (≤12 confined cells, no goal misses ⇒
+   PLAN allowed, those cells excluded from execution checks).
+3. **Champion scores went stale as history grew** ("WORSE than your best
+   (X vs Y)" compared scores from different timeline lengths). Fix: re-score
+   the champion whenever the timeline has grown.
+4. **The backend was swapped out from under the Qwen run at 00:05** by a
+   nightly wake restoring the resting default (qwen36-lens, single-flight
+   mlx-lm). Consequences: 4-way concurrent sampling serialized; the
+   wedge-watchdog mistook the long queues for hangs and kill-restarted the
+   backend every ~10 min for 12 h; 51 HTTP retries; and all best-of-N samples
+   came back byte-identical (mlx-lm seeds deterministically) — best-of-4 was
+   silently pass@1. Fixes: backend switched back to qwen36 (vllm-mlx),
+   per-sample seeds + temperature ladder, loud ops-journal note telling
+   nightly wakes not to restore the default while a run is live.
+5. **Qwen's commandless enumeration spiral** (newline-free "predicts 3->c for
+   y=105 … y=106 …" prose) evaded the line-based loop detector and burned
+   whole deliberations. Fixes: shingle-based repetition detector; end the
+   deliberation after 3 commandless turns and rebuild context from durable
+   state.
+
+Meta-lesson for the writeup: most of what looked like "the model is too weak"
+was harness/infra pathology. The model-capability read on Qwen is only valid
+from runs after these fixes.

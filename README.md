@@ -72,6 +72,23 @@ anyone running Schema-style loops on small models:
    weaker than "was 3: predicted 9, real 3" plus the aggregate breakdown
    ("897 cells your model changed but reality did NOT") — the latter
    distinguishes over-firing rules from missing mechanisms at a glance.
+6. **Champion scores go stale.** Backtest scores are relative to the current
+   history; as probes append transitions, a champion scored on 27 of them is
+   incomparable with a candidate scored on 71. The champion is now re-scored
+   whenever the timeline has grown before any "WORSE than best" comparison.
+7. **Strict-green planning deadlocks on cosmetic mismatches.** LS20 has a live
+   move-counter glyph that is effectively unmodelable; 2 wrong cells locked
+   even a frontier model out of BFS and aborted every multi-step commit for a
+   whole run. NEAR-GREEN tolerance: mismatches confined to ≤12 cells (and no
+   goal misses) allow PLAN, and plan execution ignores exactly those cells.
+   This is a deliberate deviation from Schema's strict certify-then-plan.
+8. **Commandless spirals don't recover in-context.** Once the model produces
+   turns of enumeration prose with no command, more feedback in the same
+   context never rescues it. Three commandless turns end the deliberation and
+   rebuild the context from durable state (notes + world model).
+9. **Degenerate sampling.** On one serving stack (mlx-lm) all best-of-N
+   samples came back byte-identical — best-of-4 was silently a no-op. The
+   sampler now sends distinct per-sample seeds and a small temperature ladder.
 
 ## Layout
 
