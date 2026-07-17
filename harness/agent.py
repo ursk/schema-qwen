@@ -114,6 +114,7 @@ class Agent:
         self.recent_events = []  # (action, summary) since last context rebuild
         self.best_path = self.run_dir / "world_model_best.py"
         self.best_score = None  # lowest total_wrong_cells seen
+        self.last_score = None  # score of the currently saved world_model.py
 
     def trace(self, text):
         self._trace_f.write(text)
@@ -170,6 +171,7 @@ class Agent:
         if "error" in rep:
             return f"world_model.py saved, but backtest FAILED to run:\n{rep['error']}"
         score = rep.get("total_wrong_cells")
+        self.last_score = score
         score_note = ""
         if score is not None:
             if self.best_score is None or score < self.best_score:
@@ -302,6 +304,14 @@ class Agent:
     def deliberate(self, opening_extra=""):
         """One deliberation: converse until a COMMIT executes or turns run out."""
         self.deliberation_no += 1
+        # a deliberation starts from the best-verified theory, not the last experiment
+        if (self.best_path.exists() and self.best_score is not None
+                and (self.last_score is None or self.last_score > self.best_score)):
+            self.model_path.write_text(self.best_path.read_text())
+            self.last_score = self.best_score
+            opening_extra = (opening_extra + "\n" if opening_extra else "") + (
+                f"(world_model.py was restored to your best-scoring version, "
+                f"{self.best_score} wrong cells — later revisions scored worse.)")
         messages = [
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": self.situation(opening_extra)},
