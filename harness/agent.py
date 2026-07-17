@@ -259,7 +259,9 @@ class Agent:
                     self.backtest_green = False
                     self.last_plan = None
                     break
-        return "\n".join(out)
+        result = "\n".join(out)
+        self.log("commit", {"actions": actions, "result": result})
+        return result
 
     # ---------- parsing ----------
 
