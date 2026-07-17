@@ -190,6 +190,12 @@ class Agent:
             else:
                 lines.append(f"- step {m.get('step_i')} (action {m.get('action')}): {m.get('detail')}")
         lines.append("Revise init_state/step/render (or is_goal) to explain these, then resubmit.")
+        if self.timeline.action_count < 12:
+            lines.append(
+                f"NOTE FROM HARNESS: only {self.timeline.action_count} real transitions are "
+                f"recorded. With this little data, a short probe (`COMMIT: <action>`) usually "
+                f"constrains the rule far more than another rewrite. Try each untested action once."
+            )
         return "\n".join(lines)
 
     def do_plan(self):
