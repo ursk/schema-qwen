@@ -27,6 +27,8 @@ def main():
     ap.add_argument("--max-actions", type=int, default=1500)
     ap.add_argument("--max-deliberations", type=int, default=200)
     ap.add_argument("--max-tokens", type=int, default=4096)
+    ap.add_argument("--samples", type=int, default=4,
+                    help="candidate replies sampled per turn (best-of-N via backtest)")
     ap.add_argument("--run-name", default=None)
     args = ap.parse_args()
 
@@ -42,7 +44,7 @@ def main():
     timeline = Timeline(run_dir / "timeline.jsonl")
     env = Env(args.game, timeline, max_actions=args.max_actions)
     llm = LLM(args.base_url, args.model, max_tokens=args.max_tokens)
-    agent = Agent(env, timeline, llm, run_dir, log)
+    agent = Agent(env, timeline, llm, run_dir, log, samples=args.samples)
 
     env.reset()
     print(f"[{args.game}] started · {env.win_levels} levels · run dir {run_dir}")

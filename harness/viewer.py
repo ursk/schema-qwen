@@ -46,6 +46,12 @@ def humanize(e):
         elif "GAME OVER" in res:
             tail = " — game over"
         return f"{ts} 🎮 executed: {acts}{tail}"
+    if k == "turn" and d.get("anomalies"):
+        return f"{ts} ⚠ anomaly: {', '.join(d['anomalies'])} (turn {d.get('turn')}, {d.get('gen_tokens')} tok)"
+    if k == "bestofn":
+        sc = d.get("scores", {})
+        return (f"{ts} 🎲 best-of-{d.get('n')}: {d.get('code_candidates')} code candidates, "
+                f"scores {sc} → adopted #{d.get('adopted')}")
     if k == "progress":
         return (f"{ts} ── deliberation {d.get('deliberation')} done · level {d.get('level')} · "
                 f"{d.get('actions')} actions · {d.get('llm_calls')} llm calls")
@@ -137,6 +143,22 @@ footer{color:var(--muted);font-size:11px;margin-top:20px;max-width:76ch}
           <label><input type="checkbox" id="follow" checked> follow live</label>
         </div>
         <div class="meta" id="meta"></div>
+      </div>
+      <div class="card">
+        <h2>Rollout stats</h2>
+        <div style="display:flex;gap:18px;align-items:baseline">
+          <div><span id="tps" style="font-size:28px;font-weight:700;font-variant-numeric:tabular-nums">–</span>
+            <span style="font-size:12px;color:var(--muted)"> tok/s</span></div>
+          <div class="meta" id="genstat" style="margin-top:0"></div>
+        </div>
+        <div class="meta" style="margin-top:8px">tokens per turn (green = code accepted, gray = other, red edge = anomaly)</div>
+        <svg id="turnbars" viewBox="0 0 480 60" preserveAspectRatio="none"
+             style="width:100%;height:60px;background:var(--page);border:1px solid var(--border);border-radius:6px"></svg>
+        <div class="meta" style="margin-top:6px">world-model lines added/removed per turn</div>
+        <svg id="wmbars" viewBox="0 0 480 40" preserveAspectRatio="none"
+             style="width:100%;height:40px;background:var(--page);border:1px solid var(--border);border-radius:6px"></svg>
+        <div class="meta" style="margin-top:8px">anomalies</div>
+        <pre class="log" id="anoms" style="max-height:110px"></pre>
       </div>
     </div>
     <div>
@@ -370,6 +392,38 @@ function tick() {
 let feedCount = 0;
 // works at / locally and under a reverse-proxy mount like /schema
 const BASE = location.pathname.replace(/\\/$/, "");
+function rollout(live, turns) {
+  const tps = document.getElementById("tps"), gs = document.getElementById("genstat");
+  const fresh = live && (Date.now() / 1000 - live.updated) < 6;
+  if (fresh && live.generating) {
+    tps.textContent = live.tok_s;
+    gs.textContent = `generating (${live.samples}× sampled) · ${live.tokens} tok · ${live.seconds}s`;
+  } else if (turns && turns.length) {
+    const t = turns[turns.length - 1];
+    tps.textContent = t.tok_s;
+    gs.textContent = `idle · last turn: ${t.gen_tokens} tok in ${t.seconds}s (${t.samples}× sampled)`;
+  } else { tps.textContent = "–"; gs.textContent = "waiting for first turn"; }
+  if (!turns) return;
+  const T = turns.slice(-60), W = 480, H = 60;
+  const maxTok = Math.max(1, ...T.map(t => t.gen_tokens));
+  const bw = W / Math.max(T.length, 20);
+  document.getElementById("turnbars").innerHTML = T.map((t, i) => {
+    const h = Math.max(2, t.gen_tokens / maxTok * (H - 4));
+    const fill = t.kind === "code" ? "var(--good)" : "var(--muted)";
+    const stroke = t.anomalies.length ? ' stroke="var(--critical)" stroke-width="1.5"' : "";
+    return `<rect x="${(i * bw + 1).toFixed(1)}" y="${(H - h - 2).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${h.toFixed(1)}" fill="${fill}" opacity="0.75"${stroke}><title>d${t.deliberation} t${t.turn}: ${t.gen_tokens} tok, ${t.kind}${t.anomalies.length ? " ⚠" + t.anomalies.join(",") : ""}</title></rect>`;
+  }).join("");
+  const maxWm = Math.max(1, ...T.map(t => t.wm_added + t.wm_removed));
+  document.getElementById("wmbars").innerHTML = T.map((t, i) => {
+    const ha = t.wm_added / maxWm * 18, hr = t.wm_removed / maxWm * 18;
+    return `<rect x="${(i * bw + 1).toFixed(1)}" y="${(20 - ha).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${ha.toFixed(1)}" fill="var(--good)" opacity="0.75"></rect>` +
+           `<rect x="${(i * bw + 1).toFixed(1)}" y="20" width="${(bw - 2).toFixed(1)}" height="${hr.toFixed(1)}" fill="var(--critical)" opacity="0.6"></rect>`;
+  }).join("");
+  const an = turns.filter(t => t.anomalies.length).slice(-8);
+  document.getElementById("anoms").textContent = an.length
+    ? an.map(t => `d${t.deliberation} turn ${t.turn}: ${t.anomalies.join(", ")}`).join("\\n")
+    : "none";
+}
 async function poll() {
   try {
     const r = await fetch(`${BASE}/data?since=${events.length}&feed_since=${feedCount}`);
@@ -387,6 +441,7 @@ async function poll() {
     }
     feedCount = d.feed_count;
     chips(d.stats);
+    rollout(d.live, d.turns);
     document.getElementById("notes").textContent = d.notes;
     document.getElementById("wm").textContent = d.world_model;
   } catch (e) {}
@@ -429,6 +484,7 @@ class Handler(BaseHTTPRequestHandler):
             feed, feed_count = [], 0
             stats = {"backtest": None, "llm_calls": 0, "actions": 0,
                      "level": 0, "finished": None}
+            turns = []
             ej = RUN_DIR / "events.jsonl"
             if ej.exists():
                 with open(ej) as f:
@@ -456,6 +512,8 @@ class Handler(BaseHTTPRequestHandler):
                         stats["finished"] = "WIN"
                     elif k == "stop":
                         stats["finished"] = d.get("reason")
+                    if k == "turn":
+                        turns.append(d)
                     if i >= feed_since:
                         h = humanize(e)
                         if h:
@@ -473,12 +531,20 @@ class Handler(BaseHTTPRequestHandler):
                 if last is not None:
                     stats["actions"] = n_actions
                     stats["level"] = last["level"]
+            live = None
+            lp = RUN_DIR / "live.json"
+            if lp.exists():
+                try:
+                    live = json.loads(lp.read_text())
+                except Exception:
+                    live = None
             def read(name):
                 p = RUN_DIR / name
                 return p.read_text() if p.exists() else "(none yet)"
             body = json.dumps({
                 "run": RUN_DIR.name, "events": events,
                 "feed": feed, "feed_count": feed_count, "stats": stats,
+                "turns": turns[-80:], "live": live,
                 "notes": read("notes.md"), "world_model": read("world_model.py"),
             }).encode()
             self._send(body, "application/json")
