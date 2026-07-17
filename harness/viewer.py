@@ -106,6 +106,20 @@ label{font-size:12px;color:var(--ink2);user-select:none}
   font:11px/1.55 ui-monospace,Menlo,monospace;color:var(--ink2);
   max-height:300px;overflow-y:auto;background:var(--page);
   border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin:0}
+details.expl{margin-top:2px}
+details.expl summary{cursor:pointer;font-size:13px;font-weight:600;
+  color:var(--ink2);padding:2px 0}
+details.expl summary:hover{color:var(--ink)}
+.expl h3{font-size:13px;margin:16px 0 4px;color:var(--ink)}
+.expl p,.expl li{font-size:13px;color:var(--ink2);line-height:1.55}
+.expl p{margin:6px 0;max-width:86ch}
+.expl ul,.expl ol{margin:4px 0;padding-left:20px;max-width:84ch}
+.expl li{margin:4px 0}
+.expl code{font:12px ui-monospace,Menlo,monospace;background:var(--page);
+  border:1px solid var(--border);border-radius:4px;padding:0 4px}
+.expl a{color:var(--accent)}
+.expl b{color:var(--ink)}
+footer{color:var(--muted);font-size:11px;margin-top:20px;max-width:76ch}
 @media(max-width:1100px){.cols{grid-template-columns:1fr}}
 </style></head><body>
 <div class="wrap">
@@ -131,6 +145,181 @@ label{font-size:12px;color:var(--ink2);user-select:none}
       <div class="card"><h2>World model (world_model.py)</h2><pre class="log" id="wm" style="max-height:240px"></pre></div>
     </div>
   </div>
+
+  <div class="card">
+    <details class="expl">
+      <summary>What is this? — the method, our reproduction, and where we deviate</summary>
+
+      <h3>The benchmark: games that don't tell you the rules</h3>
+      <p>
+        <a href="https://arcprize.org/arc-agi/3">ARC-AGI-3</a> (ARC Prize
+        Foundation, March 2026) is a set of interactive games. The agent sees a
+        64×64 grid of 16 colors — that's the canvas on the left — and a handful
+        of unlabeled actions: <code>1</code>–<code>5</code>,
+        sometimes a click <code>6@x,y</code>, and <code>RESET</code>. Nothing
+        else. No rule sheet, no object list, no stated goal, no reward signal.
+        The agent must discover what the pixels mean, what its actions do, and
+        what counts as progress, purely by acting and watching. Each game has
+        several levels; the official metric (RHAE) scores completion <i>and</i>
+        action-efficiency against first-time human baselines, squaring the
+        penalty for wasted actions. Frontier models scored 0.51% at launch;
+        the best official result by July 2026 was 13.33% (GPT-5.6 Sol, Public
+        set). You can play the games yourself at
+        <a href="https://three.arcprize.org">three.arcprize.org</a> — five
+        minutes with one game makes everything below concrete.
+      </p>
+
+      <h3>The method we're reproducing: Schema</h3>
+      <p>
+        <a href="https://schema-harness.github.io/">Schema</a> (Impossible
+        Research, July 2026) self-reports ~99% RHAE on the 25 public games
+        using Claude Opus 4.8 + Fable 5 — with the <em>same</em> models scoring
+        42.8% under a generic coding harness. The claim is that the arrangement
+        around the model, not the model, closes that gap. Schema makes the
+        agent behave like a physicist:
+      </p>
+      <ul>
+        <li><b>The world model is a program, not a vector.</b> The agent's
+          entire theory of the game lives in one editable Python file (right
+          panel, live). It must define what the state <i>is</i>
+          (<code>init_state</code> — which pixels form objects, what hidden
+          variables exist) and how it <i>moves</i>
+          (<code>step(state, action)</code>), plus <code>render</code> (state →
+          expected grid) and <code>is_goal</code> (what completes a level).
+          Because the theory is code, it is readable, diffable, and — the key
+          property — <em>executable</em>: it doubles as a simulator.</li>
+        <li><b>Certify against all of history.</b> Every real transition ever
+          observed is recorded in an append-only timeline. A
+          <i>backtest</i> replays the candidate program over the entire record
+          and demands exact, cell-perfect agreement. One wrong pixel = RED,
+          with the counterexample. The agent cannot fool itself about how good
+          its theory is.</li>
+        <li><b>Plan inside the certified model.</b> Once the backtest is GREEN,
+          breadth-first search runs thousands of simulated games inside the
+          program to find a shortest action sequence to the goal — costing
+          zero real actions. This is where the efficiency comes from: pay for
+          discovery once, then plan for free.</li>
+        <li><b>Reality outranks the model.</b> During execution every real
+          frame is compared with the model's prediction; the first mismatch
+          aborts the plan and becomes a counterexample the model must explain
+          before planning resumes.</li>
+        <li><b>Act to discover, not just to win.</b> When several rules fit
+          the history, the right move is the experiment that best separates
+          them — commit it, observe, revise.</li>
+      </ul>
+      <p>
+        The loop you see in the play-by-play is exactly this cycle:
+        <code>observe → deliberate (theorize / backtest / plan) → execute →
+        record</code>, repeated per level.
+      </p>
+
+      <h3>Our reproduction</h3>
+      <p>
+        The harness (<a href="https://github.com/ursk/schema-qwen">ursk/schema-qwen</a>)
+        reimplements the Schema loop from the blog post alone — no code was
+        released. The games run locally via the official <code>arc-agi</code>
+        toolkit; the agent talks to a local LLM served on this same Mac Studio.
+        The harness owns everything deterministic: the append-only timeline,
+        the sandboxed backtest with cell-level diff reports, BFS over the
+        model's state space, per-step prediction checks during execution, and
+        the persistent memory files (<code>notes.md</code>,
+        <code>world_model.py</code>). The LLM owns exactly two things: writing
+        the world-model code, and choosing which experiment to run next.
+      </p>
+
+      <h3>Where we deviate from the published method</h3>
+      <ol>
+        <li><b>A ~35B local model instead of frontier models.</b> Schema used
+          Claude Opus 4.8 / Fable 5 and GPT-5.6 Sol at max reasoning, with a
+          two-model fallback pairing per game. We run one model:
+          Qwen3.6-35B-A3B, 4-bit, on a single Mac Studio. Accordingly the goal
+          is deliberately modest — <em>fully clear one public game</em> — not
+          a 25-game RHAE score, and there is no fallback pairing.</li>
+        <li><b>Plain-text command protocol instead of native tool calls.</b>
+          Small models are fragile at structured tool-calling (our own
+          SWE-bench-style evals showed illegal-tool-format as the dominant
+          failure axis), so the agent answers with a python code block or a
+          bare command line (<code>PLAN</code>, <code>COMMIT …</code>,
+          <code>NOTE:</code>), parsed with regexes and re-prompted on
+          failure.</li>
+        <li><b>The harness compensates for weak-model pathologies</b> that the
+          Schema post never needed to mention. Each was added after watching
+          this agent fail in a specific way:
+          <ul>
+            <li><i>Repetition runaway</i> — in long contexts the model can lock
+              into repeating one line until the token cap; the streaming client
+              detects periodicity mid-generation and truncates with an
+              explanation.</li>
+            <li><i>Unchanged resubmits</i> — the model narrates the right probe
+              but pastes its old code back; identical resubmissions are
+              rejected, and an explicit <code>COMMIT</code> outranks an
+              unchanged code block.</li>
+            <li><i>Theorizing on thin data</i> — with under ~12 recorded
+              transitions, RED backtest reports nudge toward a real probe
+              instead of another rewrite.</li>
+            <li><i>Regression blindness</i> — every submission is scored (total
+              mispredicted cells); the harness keeps the best-scoring model,
+              announces regressions, offers <code>REVERT</code>, and starts
+              each deliberation from the best-verified theory.</li>
+            <li><i>Richer counterexamples</i> — mismatch reports include each
+              cell's before-value and an aggregate breakdown ("N cells your
+              model changed but reality did NOT / M cells reality changed but
+              your model did NOT"), separating over-firing rules from missing
+              mechanisms at a glance.</li>
+          </ul>
+          Whether these are "deviations" or just the price of running the
+          method on a small model is, in a sense, the experiment.</li>
+        <li><b>Simplified planning.</b> Our BFS searches simple actions plus
+          clicks the model explicitly proposes via
+          <code>candidate_clicks(state)</code>, with node/depth caps, states
+          keyed by canonical JSON. Schema describes richer deliberation-time
+          search but not its exact machinery; ours is the minimal version.</li>
+        <li><b>Backtest semantics per level segment.</b> We fold each level's
+          transitions from that level's first observed frame; on level-up
+          transitions we check <code>is_goal</code> instead of the (unseen next
+          level) grid. The post doesn't specify its exact treatment; this is
+          our reading.</li>
+        <li><b>No RHAE pipeline.</b> We track raw action counts against the
+          eventual goal of one cleared game. Any numbers here are self-measured
+          and not comparable to official leaderboard scores.</li>
+      </ol>
+
+      <h3>How to read this dashboard</h3>
+      <ul>
+        <li><b>Game</b> — the real environment, live; uncheck <i>follow
+          live</i> to scrub back through every recorded frame.</li>
+        <li><b>Play-by-play</b> — the run narrated from the structured event
+          log: 🧠 model turns, ❌/✅ backtest verdicts with wrong-cell
+          breakdowns, 🔍 BFS results, 🎮 executed actions (with SURPRISE /
+          LEVEL UP flags).</li>
+        <li><b>Agent notes</b> — the model's own persistent scratchpad; its
+          hypotheses in its own words.</li>
+        <li><b>World model</b> — the agent's current theory of the game as
+          runnable code. Watching this file evolve — objects appearing,
+          rules generalizing, representations being torn up after a
+          counterexample — is the most interpretable view of the agent's
+          understanding.</li>
+      </ul>
+
+      <h3>Status & caveats</h3>
+      <p>
+        Work in progress. The agent has not yet cleared a level; it is
+        currently inducing the first game's mechanism (watch the backtest
+        wrong-cell count trend down in the play-by-play). Everything is
+        self-reported; the agent never sees the game's source code (the
+        toolkit downloads it to run locally, but that directory is walled off
+        from the agent). Expect the run to take many hours: one deliberation
+        turn ≈ one local 35B generation.
+      </p>
+    </details>
+  </div>
+
+  <footer>
+    Single Mac Studio (M3 Ultra, 96 GB) serving both the game and the model —
+    qwen36 via mlx/vllm on the local backend slot. Harness, dashboard, and run
+    artifacts: <a href="https://github.com/ursk/schema-qwen" style="color:inherit">github.com/ursk/schema-qwen</a>.
+    After <a href="https://schema-harness.github.io/" style="color:inherit">Schema</a> (Impossible Research, 2026).
+  </footer>
 </div>
 <script>
 const PALETTE = ["#000000","#0074D9","#FF4136","#2ECC40","#FFDC00","#AAAAAA",
