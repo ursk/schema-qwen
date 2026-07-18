@@ -405,8 +405,11 @@ class Agent:
                 self.best_path.write_text(code)
                 score_note = f"This is your BEST model so far ({score} wrong cells total)."
             else:
-                score_note = (f"WORSE than your best model ({score} vs {self.best_score} wrong "
-                              f"cells). Say REVERT to restore the best one.")
+                # neutral report — prescribing "Say REVERT" here trapped an
+                # instruction-compliant model in a code->revert loop whenever
+                # its champion was a degenerate identity model
+                score_note = (f"This scores {score} wrong cells; your best-scoring model "
+                              f"so far scored {self.best_score}.")
         mm = rep.get("mismatches", [])
         lines = [f"world_model.py saved. backtest RED: {rep.get('n_mismatches')} mismatching "
                  f"transitions out of {rep.get('transitions_checked')}. {score_note} First mismatches:"]
