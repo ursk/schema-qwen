@@ -45,6 +45,15 @@ class LLM:
         for attempt in range(5):
             try:
                 text, chunks = self._stream_once(payload, on_delta)
+                if chunks == 0:
+                    # gptoss120's serialized route rejects overlapping requests
+                    # with a clean-but-empty stream ("route is busy") — retryable,
+                    # never a real reply
+                    last_err = RuntimeError("empty stream (backend busy?)")
+                    if on_delta:
+                        on_delta(f"\n[empty stream, retry {attempt + 1}/5]\n")
+                    time.sleep(20 * (attempt + 1))
+                    continue
                 # gpt-oss via vllm-mlx streaming leaks harmony channel markers
                 # into content ("analysis...assistantfinal<reply>") — the
                 # reasoning parser only runs on the non-stream path. Keep only
