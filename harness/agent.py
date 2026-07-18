@@ -62,6 +62,14 @@ class LLM:
                     text = text.split("assistantfinal")[-1]
                 return {"text": text, "chunks": chunks, "retries": attempt}
             except (httpx.HTTPStatusError, httpx.TransportError) as e:
+                # a 400 with chat_template_kwargs set is usually a template that
+                # doesn't know enable_thinking (mistral) — drop it and retry now
+                if (isinstance(e, httpx.HTTPStatusError)
+                        and e.response.status_code == 400
+                        and "chat_template_kwargs" in payload):
+                    payload = {k: v for k, v in payload.items()
+                               if k != "chat_template_kwargs"}
+                    continue
                 # local backend may crash and get relaunched by launchd — wait it out
                 last_err = e
                 if on_delta:
