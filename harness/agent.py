@@ -45,6 +45,12 @@ class LLM:
         for attempt in range(5):
             try:
                 text, chunks = self._stream_once(payload, on_delta)
+                # gpt-oss via vllm-mlx streaming leaks harmony channel markers
+                # into content ("analysis...assistantfinal<reply>") — the
+                # reasoning parser only runs on the non-stream path. Keep only
+                # the final channel; a no-op for models without the marker.
+                if "assistantfinal" in text:
+                    text = text.split("assistantfinal")[-1]
                 return {"text": text, "chunks": chunks, "retries": attempt}
             except (httpx.HTTPStatusError, httpx.TransportError) as e:
                 # local backend may crash and get relaunched by launchd — wait it out
