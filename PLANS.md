@@ -271,3 +271,18 @@ flat (~70–115 wrong cells) for 100+ deliberations. The representational leap
 ("one avatar that moves") never came. Schema's central claim reproduced in
 the negative: backtest+search transfer downmarket; paradigm breaks don't.
 Next per Urs: try gemma26 (run gemma1), same game, same rules.
+
+## Calibration from Urs's own playtest (2026-07-18)
+
+Urs played the first few public games by hand: the avatar style stays the
+same and difficulty only rises — so there is no softer entry game, and LS20
+results generalize. The "try a different game" idea is dead. Opus through our
+cc: adapter did somewhat better than the locals but no clear on a ~5h token
+budget, with poor progress per wall-clock — note the published Schema cleared
+LS20 with Opus 4.8 through a native tool-calling agent, so part of our gap is
+the reproduction's flattened transport, not model capability. Fair paths
+forward, stack-ranked: (1) finish the local capability map (gemma1 running),
+(2) a patient quota-riding Opus lane (resume-across-sessions already works),
+(3) the E1 synthetic-curriculum training ladder — under the no-cheating rule,
+changing the MODEL via training on procedural games with clean provenance is
+fair; inference-time scaffolds and priming are not.
