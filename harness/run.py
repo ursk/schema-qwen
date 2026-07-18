@@ -32,10 +32,16 @@ def main():
     ap.add_argument("--stop-at-level", type=int, default=None,
                     help="stop the run once this many levels are cleared")
     ap.add_argument("--run-name", default=None)
+    ap.add_argument("--from-ckpt", default=None,
+                    help="seed the run dir from a named checkpoint (any model "
+                         "may continue any player's checkpoint)")
     args = ap.parse_args()
 
     stamp = args.run_name or datetime.now(timezone.utc).strftime("%m%d-%H%M%S")
     run_dir = ROOT / "runs" / f"{args.game}-{stamp}"
+    if args.from_ckpt:
+        from .checkpoint import seed
+        seed(args.from_ckpt, run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     events_path = run_dir / "events.jsonl"
 
