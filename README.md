@@ -76,12 +76,15 @@ anyone running Schema-style loops on small models:
    history; as probes append transitions, a champion scored on 27 of them is
    incomparable with a candidate scored on 71. The champion is now re-scored
    whenever the timeline has grown before any "WORSE than best" comparison.
-7. **Strict-green planning deadlocks on cosmetic mismatches.** LS20 has a live
-   move-counter glyph that is effectively unmodelable; 2 wrong cells locked
-   even a frontier model out of BFS and aborted every multi-step commit for a
-   whole run. NEAR-GREEN tolerance: mismatches confined to ≤12 cells (and no
-   goal misses) allow PLAN, and plan execution ignores exactly those cells.
-   This is a deliberate deviation from Schema's strict certify-then-plan.
+7. **Small confined mismatches deserve a pointed hint, not a waiver.** LS20
+   has a live move-counter glyph; 2 wrong cells locked a frontier model out
+   of BFS for a whole run. We briefly tried a "near-green" tolerance
+   (mismatches confined to ≤12 cells allow PLAN) and removed it the same day:
+   the original Schema is strict — its Opus 4.8 trace on the same game
+   reaches 36/36 exact — and the bar here is a fair-and-square clear. Every
+   pixel is deterministic, so the counter font is modelable; the harness now
+   responds to confined mismatches by listing the exact cells and telling the
+   model to decode what lives there from recorded history.
 8. **Commandless spirals don't recover in-context.** Once the model produces
    turns of enumeration prose with no command, more feedback in the same
    context never rescues it. Three commandless turns end the deliberation and

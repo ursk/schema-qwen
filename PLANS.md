@@ -186,3 +186,18 @@ kept playing but with no sensible moves and no hypothesis. Diagnosis:
 Meta-lesson for the writeup: most of what looked like "the model is too weak"
 was harness/infra pathology. The model-capability read on Qwen is only valid
 from runs after these fixes.
+
+## Ruling 2026-07-17: strict certification, no near-green (Urs)
+
+The near-green tolerance shipped in the morning fixes was reverted the same
+day on Urs's ruling: "our goal is to clear one level fair and square. No
+cheating." The original Schema is strict — its published LS20 trace (Opus 4.8)
+reaches 36/36 exact transitions WITH the counter box modeled — so the counter
+font is demonstrably modelable and the tolerance was lowering our bar, not
+fixing an environment quirk. Kept from that work: the confined-mismatch HINT
+(list the exact stubborn cells, point out they're deterministic and decodable
+from history) — better counterexamples are fair; waived cells are not.
+
+Also ruled: no more open-ended Opus runs (token cost). The cc: validation
+lane is reserved for harness debugging only, with strict token limits agreed
+in advance. Task focus returns to Qwen clearing a level.

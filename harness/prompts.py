@@ -47,9 +47,10 @@ try clicks.
 
 2. PLAN
 Run breadth-first search inside your world model from the current state to a \
-goal state. Available when the backtest is GREEN, or NEAR-GREEN (mismatches \
-confined to a few cells, e.g. an unmodeled HUD glyph — the harness lists the \
-tolerated cells and ignores them during plan execution).
+goal state. Only useful when the backtest is GREEN — a wrong model finds wrong plans. \
+Every pixel is deterministic and modelable, including HUD elements like counters \
+and fonts: if a few stubborn cells keep the backtest RED, decode them from the \
+recorded history instead of giving up on planning.
 
 3. COMMIT PLAN
 Execute the plan found by your last PLAN, action by action. Execution stops \

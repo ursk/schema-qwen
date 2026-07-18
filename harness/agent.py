@@ -235,33 +235,16 @@ class Agent:
         self.best_score = None  # lowest total_wrong_cells seen
         self.best_scored_len = -1  # action_count when best_score was computed
         self.last_score = None  # score of the currently saved world_model.py
-        self.tolerated = set()  # (x,y) cells the current model is known-wrong on
-        self.near_green = False  # RED but confined to a few tolerated cells
         if self.best_path.exists() and self.timeline.events:
             # resumed run: re-score the saved best so it isn't clobbered
             self._rescore_best()
         if self.model_path.exists() and self.timeline.events:
-            # resumed run: evaluate the current model so green/near-green
-            # status (and PLAN availability) survives the restart
+            # resumed run: evaluate the current model so a green backtest
+            # (and PLAN availability) survives the restart
             rep = run_worker("backtest", self.model_path, self.timeline.path)
             self.backtest_green = bool(rep.get("ok"))
-            n_bad = rep.get("n_bad_cells")
-            self.near_green = bool(
-                not self.backtest_green and n_bad
-                and n_bad <= self.TOLERATE_MAX_CELLS and not rep.get("n_goal_misses")
-            )
-            self.tolerated = (
-                {tuple(c) for c in rep.get("bad_cells", [])} if self.near_green else set()
-            )
             if rep.get("total_wrong_cells") is not None:
                 self.last_score = rep["total_wrong_cells"]
-
-    # near-green tolerance: a model wrong only on a handful of cells (e.g. an
-    # unmodeled HUD/counter font) may still PLAN and run multi-step COMMITs,
-    # with those cells excluded from the per-step misprediction check. Without
-    # this a 2-cell cosmetic mismatch locks the agent out of BFS entirely
-    # (observed: Opus spent a whole run unable to PLAN over a counter glyph).
-    TOLERATE_MAX_CELLS = 12
 
     def _rescore_best(self):
         """Champion scores are history-relative — re-score when history grew.
@@ -341,8 +324,6 @@ class Agent:
             parts.append("RECENT TRANSITIONS (newest last):\n" + "\n".join(lines))
         bt = ("no world model yet" if not wm else
               "GREEN (reproduces all recorded transitions)" if self.backtest_green
-              else f"NEAR-GREEN ({len(self.tolerated)} unmodeled cells tolerated — "
-                   f"PLAN allowed)" if self.near_green
               else "RED (has mismatches — fix before planning)")
         parts.append(
             f"GAME STATUS: level {self.env.level}/{self.env.win_levels} · "
@@ -378,21 +359,11 @@ class Agent:
         self.backtest_green = bool(rep.get("ok"))
         self.log("backtest", rep)
         if self.backtest_green:
-            self.tolerated = set()
-            self.near_green = False
             return (f"world_model.py saved. backtest GREEN: "
                     f"{rep.get('transitions_checked', 0)} recorded transitions reproduced exactly. "
                     f"You may PLAN now.")
         if "error" in rep:
             return f"world_model.py saved, but backtest FAILED to run:\n{rep['error']}"
-        n_bad = rep.get("n_bad_cells")
-        self.near_green = bool(
-            n_bad and n_bad <= self.TOLERATE_MAX_CELLS
-            and not rep.get("n_goal_misses")
-        )
-        self.tolerated = (
-            {tuple(c) for c in rep.get("bad_cells", [])} if self.near_green else set()
-        )
         score = rep.get("total_wrong_cells")
         self.last_score = score
         self._rescore_best()
@@ -409,13 +380,14 @@ class Agent:
         mm = rep.get("mismatches", [])
         lines = [f"world_model.py saved. backtest RED: {rep.get('n_mismatches')} mismatching "
                  f"transitions out of {rep.get('transitions_checked')}. {score_note} First mismatches:"]
-        if self.near_green:
-            cells = ", ".join(f"({x},{y})" for x, y in sorted(self.tolerated))
+        n_bad = rep.get("n_bad_cells")
+        if n_bad and n_bad <= 16 and not rep.get("n_goal_misses"):
+            cells = ", ".join(f"({x},{y})" for x, y in rep.get("bad_cells", []))
             lines.append(
-                f"NEAR-GREEN: all mismatches are confined to {n_bad} cell(s) [{cells}]. "
-                f"The harness now treats these cells as UNMODELED: PLAN is allowed, and "
-                f"plan execution ignores mispredictions on exactly these cells. "
-                f"Modeling them properly is still better (they may encode the goal)."
+                f"HINT: all mismatches are confined to just {n_bad} distinct cell(s) "
+                f"[{cells}]. Whatever lives there (a counter? a HUD glyph?) is "
+                f"deterministic and CAN be modeled — decode it from the recorded "
+                f"history to reach GREEN. It may even encode the goal."
             )
         for m in mm:
             if m.get("kind") == "grid":
@@ -436,7 +408,7 @@ class Agent:
     def do_plan(self):
         if not self.world_model():
             return "No world model yet — write one first."
-        if not self.backtest_green and not self.near_green:
+        if not self.backtest_green:
             return "Backtest is RED — a plan inside a wrong model is worthless. Fix the model first."
         args = {"actions": [a for a in self.env.available_actions if a in {"1", "2", "3", "4", "5", "7"}]}
         rep = run_worker("bfs", self.model_path, self.timeline.path, args)
@@ -456,7 +428,7 @@ class Agent:
     def do_commit(self, actions):
         """Execute actions; with a green model, per-step prediction check."""
         predicted = None
-        if (self.backtest_green or self.near_green) and "RESET" not in actions:
+        if self.backtest_green and "RESET" not in actions:
             rep = run_worker("predict", self.model_path, self.timeline.path, {"plan": actions})
             if rep.get("ok"):
                 predicted = rep
@@ -474,8 +446,6 @@ class Agent:
             if leveled:
                 out.append(f"[{i+1}/{len(actions)}] {a}: *** LEVEL UP -> level {ev['level']} *** (new level grid shown below)")
                 self.backtest_green = False  # new level: model unverified against it
-                self.near_green = False
-                self.tolerated = set()
                 self.last_plan = None
                 break
             if ev["state"] == "GAME_OVER":
@@ -486,21 +456,14 @@ class Agent:
             if predicted is not None:
                 pred_grid = predicted["grids"][i]
                 if pred_grid != ev["grid"]:
-                    bad = [
-                        (x, y) for y in range(64) for x in range(64)
+                    bad = sum(
+                        1 for y in range(64) for x in range(64)
                         if pred_grid[y][x] != ev["grid"][y][x]
-                    ]
-                    surprise = [c for c in bad if c not in self.tolerated]
-                    if not surprise:
-                        out.append(f"(model off only on the {len(bad)} tolerated unmodeled "
-                                   f"cell(s) this step — continuing)")
-                        continue
+                    )
                     out.append(f"SURPRISE: reality differs from your model's prediction on this "
-                               f"step ({len(surprise)} cells beyond the tolerated set). Plan "
-                               f"aborted. This transition is now in the timeline — fix the model "
-                               f"so the backtest is green again.")
+                               f"step ({bad} cells). Plan aborted. This transition is now in the "
+                               f"timeline — fix the model so the backtest is green again.")
                     self.backtest_green = False
-                    self.near_green = False
                     self.last_plan = None
                     break
         result = "\n".join(out)

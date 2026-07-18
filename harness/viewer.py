@@ -338,13 +338,16 @@ footer{color:var(--muted);font-size:11px;margin-top:20px;max-width:76ch}
           </ul>
           Whether these are "deviations" or just the price of running the
           method on a small model is, in a sense, the experiment.</li>
-        <li><b>NEAR-GREEN planning tolerance.</b> Schema plans only inside a
-          fully certified model. We relax this: when the backtest is RED but
-          all mismatches are confined to a handful of cells (&le;12, no goal
-          misses) — e.g. an unmodeled HUD counter font — the harness allows
-          PLAN and excludes exactly those cells from the per-step execution
-          check. Motivated by a validation run in which a frontier model was
-          locked out of planning for an entire run by 2 cosmetic cells.</li>
+        <li><b>Strict certification, kept.</b> Like the original, PLAN is only
+          available on a fully green backtest — no tolerance for "cosmetic"
+          mismatches. We briefly tried relaxing this (a validation run saw a
+          frontier model locked out of planning all run by a 2-cell unmodeled
+          counter font) and reverted the same day: the goal here is a
+          fair-and-square clear, and every pixel is deterministic and
+          therefore modelable. What we kept instead is a sharper
+          counterexample: when all mismatches are confined to a few cells,
+          the harness lists them and points out that whatever lives there can
+          be decoded from recorded history.</li>
         <li><b>Simplified planning.</b> Our BFS searches simple actions plus
           clicks the model explicitly proposes via
           <code>candidate_clicks(state)</code>, with node/depth caps, states
