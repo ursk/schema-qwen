@@ -201,3 +201,60 @@ from history) — better counterexamples are fair; waived cells are not.
 Also ruled: no more open-ended Opus runs (token cost). The cc: validation
 lane is reserved for harness debugging only, with strict token limits agreed
 in advance. Task focus returns to Qwen clearing a level.
+
+## Rethink after stopping run1 (2026-07-17): Qwen thrashes — why, and what next
+
+Run stopped by Urs ("just thrashing"). The telemetry agrees and localizes it.
+
+**What the data shows (runs/ls20-run1, 368 backtests, 300 best-of-N events):**
+- 348 code-rewrite turns vs 39 commits; 259 repetition-loop aborts; 148
+  no-command turns. The model rewrites instead of probing, and loops.
+- Backtest scores sit at 27k–180k wrong cells. Best-of-N spreads are marginal
+  (27,428 vs 27,718): sampling harder does not rescue it — the errors are not
+  unlucky samples, they are a wrong theory sampled consistently.
+- notes.md is the tell. Early notes are coherent observation; late notes are a
+  self-reinforcing fantasy ("Region D is the goal", "Reverting to best model
+  (21k errors)" repeated ~10×). The append-only notes became an attractor:
+  every new context starts by re-reading the junk that produced the last junk.
+
+**The root cause is perception, not search.** LS20 is a block-pushing game
+(the published Opus trace: "the avatar is the 5×5 cyan+maroon block... the bar
+is a move budget"). Qwen never formed that gestalt. A block moving left looks,
+cell-wise, like paired bands of 3->c and c->3 — Qwen read those diffs as a
+"color cycling" mechanic in static regions, then invented region-goals to
+match. Opus's first deliberation produced objects (avatar, budget bar, HUD);
+Qwen reasons at raw cell granularity for the whole run and drowns.
+
+**Proposals, ordered by leverage:**
+1. **Kill junk accumulation (cheap, no fidelity cost).** Short deliberations
+   (max 3–4 turns; the 14-turn conversations compound garbage). Notes become
+   bounded: the model must periodically REWRITE them to ≤25 lines (forced
+   consolidation turn) instead of appending forever. Add a periodic
+   "fresh eyes" deliberation that sees only harness facts (timeline-derived
+   experiment log: action → observed diff), not the model's own past prose —
+   an escape hatch from wrong gestalts.
+2. **Object-level observation reporting (the big lever; documented deviation).**
+   Harness-side connected components: report each grid and each transition as
+   objects ("5×5 block color c at (19,45)"; "block DISAPPEARED at (19,45),
+   identical block APPEARED at (24,45)" — i.e. mechanical movement detection).
+   Purely deterministic preprocessing of the agent's own observations — no
+   game internals touched — but it moves part of Schema's Level-1 state
+   grounding into the harness, so it must be reported as a deviation. It is
+   precisely the capability Qwen lacks and Opus supplies itself.
+3. **Gestalt priming (cheap).** One forced early deliberation: "What is the
+   avatar? What is HUD/score? Which archetype fits (pusher/maze/navigation/
+   budget/toggle)?" — answer stored in a dedicated GESTALT slot the model
+   sees every turn and may revise but not bury. Generalizes the parked
+   "explain what a computer game is" idea.
+4. **Fresh run (run2).** run1's durable state is poisoned by the Region-D
+   fantasy (and by 12 h of broken-backend chaos). Nothing worth resuming.
+5. **Capability ladder, local-only.** qwen36 is 35B-A3B — ~3B ACTIVE params
+   per token. gptoss120 (117B/5.1B-active, installed, ~66 tok/s) is the
+   natural next rung: same harness, same rules, no API tokens. The best-of-N
+   flatness suggests escalate-or-scaffold, not sample-harder.
+
+Recommendation: 1+3+4 unconditionally (they cost nothing and remove the
+failure mode we watched); then EITHER 2 (keep qwen36, add object scaffold,
+document the deviation) OR 5 (keep pure Schema observations, bigger local
+model) as the controlled experiment — running both, one at a time, tells us
+whether the missing ingredient is perception scaffolding or raw capability.
