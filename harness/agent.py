@@ -62,24 +62,39 @@ class LLM:
         Distinct per-sample seeds + a small temperature ladder: the backend
         seeds identically per request otherwise, and n identical samples make
         best-of-N a no-op (observed: sample_tokens [5658, 5658, 5658, 5658]).
+
+        Sample 0 launches alone and the rest wait for its first generated
+        token: n simultaneous identical prompts each prefill their own KV
+        (3/4 of requests were guaranteed prefix-cache misses); staggered,
+        samples 1..n-1 hit the prefix sample 0 just computed.
         """
         import random
         import threading
 
         base_seed = random.randrange(1 << 30)
         results = [None] * n
+        warmed = threading.Event()
         def work(i):
+            def cb(chunk, i=i):
+                if i == 0:
+                    warmed.set()
+                if on_deltas:
+                    on_deltas(i, chunk)
             try:
                 results[i] = self.chat(
-                    messages,
-                    (lambda c, i=i: on_deltas(i, c)) if on_deltas else None,
+                    messages, cb,
                     seed=base_seed + i,
                     temperature=min(1.0, self.temperature + 0.1 * i),
                 )
             except Exception:
                 results[i] = None
+            finally:
+                if i == 0:
+                    warmed.set()
         threads = [threading.Thread(target=work, args=(i,)) for i in range(n)]
-        for t in threads:
+        threads[0].start()
+        warmed.wait(timeout=180)  # prefill of a ~10k-token prompt, with margin
+        for t in threads[1:]:
             t.start()
         for t in threads:
             t.join()
