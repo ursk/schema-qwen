@@ -302,21 +302,39 @@ class Agent:
     # ---------- live generation stats ----------
 
     def _live_write(self, generating):
-        elapsed = max(time.time() - self._gen_t0, 1e-6)
+        now = time.time()
+        elapsed = max(now - self._gen_t0, 1e-6)
+        first = getattr(self, "_gen_first_t", None)
+        prompt_toks = getattr(self, "_prompt_chars", 0) // 4
+        if generating and first is None:
+            phase = "prefill"
+            prefill_s = elapsed
+        else:
+            phase = "decode" if generating else "idle"
+            prefill_s = max((first or self._gen_t0) - self._gen_t0, 1e-6)
+        decode_s = max(now - (first or now), 1e-6)
         try:
             (self.run_dir / "live.json").write_text(json.dumps({
                 "generating": generating,
+                "phase": phase,
                 "tokens": self._gen_tokens,
                 "seconds": round(elapsed, 1),
-                "tok_s": round(self._gen_tokens / elapsed, 1),
+                # decode speed measured from first token, not request start —
+                # otherwise a slow prefill masquerades as slow decoding
+                "tok_s": round(self._gen_tokens / decode_s, 1) if first else 0.0,
+                "prompt_tokens": prompt_toks,
+                "prefill_s": round(prefill_s, 1),
+                "prefill_tok_s": round(prompt_toks / prefill_s, 0) if prompt_toks else 0,
                 "samples": self.samples,
-                "updated": time.time(),
+                "updated": now,
             }))
         except OSError:
             pass
 
     def _on_deltas(self, i, chunk):
         with self._gen_lock:
+            if getattr(self, "_gen_first_t", None) is None:
+                self._gen_first_t = time.time()
             # streamed deltas are ~1 token; the CC adapter delivers the whole
             # reply as one chunk, so estimate by length there
             self._gen_tokens += 1 if len(chunk) <= 8 else max(1, len(chunk) // 4)
@@ -650,10 +668,22 @@ class Agent:
             )
             with self._gen_lock:
                 self._gen_tokens = 0
+                self._gen_first_t = None
                 self._gen_t0 = time.time()
-            self._live_write(True)
             self._prompt_chars = sum(len(m["content"]) for m in messages)
-            results = self.llm.chat_n(messages, self.samples, on_deltas=self._on_deltas)
+            self._live_write(True)
+            # ticker keeps live.json fresh during prefill, when no deltas flow
+            import threading
+            stop_tick = threading.Event()
+            def _tick():
+                while not stop_tick.wait(2.0):
+                    self._live_write(True)
+            ticker = threading.Thread(target=_tick, daemon=True)
+            ticker.start()
+            try:
+                results = self.llm.chat_n(messages, self.samples, on_deltas=self._on_deltas)
+            finally:
+                stop_tick.set()
             self._live_write(False)
             seconds = time.time() - self._gen_t0
             reply, kind, payload, bestofn = self._select_candidate(results)

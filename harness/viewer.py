@@ -465,9 +465,15 @@ function renderKv(kv) {
 function rollout(live, turns) {
   const tps = document.getElementById("tps"), gs = document.getElementById("genstat");
   const fresh = live && (Date.now() / 1000 - live.updated) < 6;
-  if (fresh && live.generating) {
+  if (fresh && live.generating && live.phase === "prefill") {
+    tps.textContent = "…";
+    gs.textContent = `PREFILL · ~${((live.prompt_tokens||0)/1000).toFixed(1)}k prompt tok · ` +
+      `${live.prefill_s}s so far` +
+      (live.prefill_tok_s ? ` · ~${live.prefill_tok_s} tok/s if it finishes now` : "");
+  } else if (fresh && live.generating) {
     tps.textContent = live.tok_s;
-    gs.textContent = `generating (${live.samples}× sampled) · ${live.tokens} tok · ${live.seconds}s`;
+    gs.textContent = `decoding (${live.samples}× sampled) · ${live.tokens} tok · ` +
+      `${live.seconds}s · prefill was ~${((live.prompt_tokens||0)/1000).toFixed(1)}k tok in ${live.prefill_s}s`;
   } else if (turns && turns.length) {
     const t = turns[turns.length - 1];
     tps.textContent = t.tok_s;
