@@ -32,6 +32,8 @@ def main():
     ap.add_argument("--stop-at-level", type=int, default=None,
                     help="stop the run once this many levels are cleared")
     ap.add_argument("--run-name", default=None)
+    ap.add_argument("--coached", action="store_true",
+                    help="use the genre-coached system prompt (A/B vs the plain one)")
     ap.add_argument("--from-ckpt", default=None,
                     help="seed the run dir from a named checkpoint (any model "
                          "may continue any player's checkpoint)")
@@ -56,11 +58,13 @@ def main():
         llm = ClaudeCLI(args.model[3:], max_tokens=args.max_tokens)
     else:
         llm = LLM(args.base_url, args.model, max_tokens=args.max_tokens)
-    agent = Agent(env, timeline, llm, run_dir, log, samples=args.samples)
+    from .prompts import SYSTEM, SYSTEM_COACHED
+    agent = Agent(env, timeline, llm, run_dir, log, samples=args.samples,
+                  system=SYSTEM_COACHED if args.coached else SYSTEM)
 
     env.reset()
     print(f"[{args.game}] started · {env.win_levels} levels · run dir {run_dir}")
-    log("start", {"game": args.game, "model": args.model, "win_levels": env.win_levels})
+    log("start", {"game": args.game, "model": args.model, "win_levels": env.win_levels, "coached": args.coached})
 
     extra = ""
     for d in range(args.max_deliberations):

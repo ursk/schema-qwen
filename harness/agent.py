@@ -239,7 +239,9 @@ def _is_looping(text, min_repeats=4):
 
 class Agent:
     def __init__(self, env, timeline, llm, run_dir: Path, log,
-                 max_deliberation_turns=14, context_char_budget=60000, samples=4):
+                 max_deliberation_turns=14, context_char_budget=60000, samples=4,
+                 system=SYSTEM):
+        self.system = system
         self.env = env
         self.timeline = timeline
         self.llm = llm
@@ -636,7 +638,7 @@ class Agent:
                 f"(world_model.py was restored to your best-scoring version, "
                 f"{self.best_score} wrong cells — later revisions scored worse.)")
         messages = [
-            {"role": "system", "content": SYSTEM},
+            {"role": "system", "content": self.system},
             {"role": "user", "content": self.situation(opening_extra)},
         ]
         consecutive_no_command = 0
@@ -704,7 +706,7 @@ class Agent:
             if sum(len(m["content"]) for m in messages) > self.char_budget:
                 # compress: keep system, drop middle, rebuild situation
                 messages = [
-                    {"role": "system", "content": SYSTEM},
+                    {"role": "system", "content": self.system},
                     {"role": "user", "content": self.situation(
                         "Context was compacted. Your notes and world model above are the "
                         "durable state; recent tool result:\n" + result)},

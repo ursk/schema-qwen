@@ -87,6 +87,59 @@ Be brief in prose. Spend your effort on the code and on choosing informative pro
 """
 
 
+# --coached variant: same protocol and method, plus genre knowledge and
+# explicit counters to every failure mode observed in the plain-prompt runs
+# (qwen: cell-level perception; gpt-oss: paradigm lock; gemma: click fixation
+# and the do-nothing-model trap). A/B against SYSTEM to measure what the
+# knowledge is worth.
+_COACHING = """
+WHAT YOU ARE PLAYING
+You are playing an ARC-AGI-3 evaluation game: a small hand-designed video game, \
+built to test whether an agent can discover mechanics by experimentation. These \
+games follow ordinary video-game conventions:
+- There is usually an AVATAR: a small sprite a few cells across, sometimes \
+multi-colored. Directional actions (usually among 1-4) MOVE it. In raw cell \
+diffs, movement looks like one same-shaped patch of cells vanishing at one \
+place while an identical patch appears nearby — that is an object MOVING, \
+not colors "cycling" or a stamp "painting".
+- Large uniform rectangles are usually terrain: walls block movement, floors \
+are traversable, distinct pads or holes may be goals.
+- Some grid regions are HUD, not world: move-budget bars that shrink per \
+action, counters whose digit glyphs redraw, level indicators. They change \
+deterministically — model them, and consider that they may encode the goal or \
+a losing condition (a budget hitting zero often means GAME_OVER or reset).
+- A level ends when a goal configuration is reached: the avatar reaching a \
+special place, objects pushed into position, or a counter reaching a value.
+- In many games clicks (6@x,y) do nothing. If a couple of clicks change \
+nothing, move on to the other actions and return to clicks only with a reason.
+
+PITFALLS THAT HAVE KILLED AGENTS BEFORE YOU
+- Reason about OBJECTS, not cells. In your first deliberations, list the \
+connected shapes you see with bounding boxes, and name which one might be the \
+avatar, which are terrain, which are HUD.
+- Paradigm lock: if your last two model revisions only adjusted coordinates or \
+offsets and the score did not clearly improve, the REPRESENTATION is wrong, \
+not the numbers. Write a NOTE naming a different mechanism family (moving \
+object / painting / toggling / pushing / gravity) and design a probe that \
+separates them.
+- Do not stop experimenting. Theories are cheap; transitions are evidence. If \
+you have revised the model twice in a row without committing an action, your \
+next reply must be a short probe.
+- The do-nothing trap: a model that predicts "nothing ever changes" can score \
+deceptively few wrong cells while explaining nothing. Prefer an active theory \
+with slightly more error and improve it; never settle on the identity model.
+- A budget bar or counter you refuse to model will keep the backtest RED \
+forever. Its font is deterministic: collect (value, glyph) pairs from history \
+and hard-code the mapping.
+- is_goal is a hypothesis like any other: propose it early, test it by \
+reaching the hypothesized configuration, revise when the level does not end.
+"""
+
+SYSTEM_COACHED = SYSTEM.replace(
+    "YOUR MEMORY IS THE HARNESS, NOT YOUR HEAD",
+    _COACHING.strip() + "\n\nYOUR MEMORY IS THE HARNESS, NOT YOUR HEAD", 1)
+
+
 def action_semantics(available):
     return (
         f"Available actions this game: {', '.join(available)}"
