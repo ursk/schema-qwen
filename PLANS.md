@@ -258,3 +258,16 @@ failure mode we watched); then EITHER 2 (keep qwen36, add object scaffold,
 document the deviation) OR 5 (keep pure Schema observations, bigger local
 model) as the controlled experiment — running both, one at a time, tells us
 whether the missing ingredient is perception scaffolding or raw capability.
+
+## Result: gptoss120 on LS20 (2026-07-17/18, runs oss1+oss2)
+
+After the serialized-route fix (empty streams retried, samples=1): 133
+deliberations, 142 actions, ZERO green backtests, level 0/7. gpt-oss forms an
+object-level ontology immediately (unlike qwen36) and probes with discipline
+(~1 experiment per deliberation, near-zero over-firing), but it locked into a
+"two paint-blocks with column offsets" gestalt in the first hour and absorbed
+every subsequent counterexample as a coordinate tweak — per-transition error
+flat (~70–115 wrong cells) for 100+ deliberations. The representational leap
+("one avatar that moves") never came. Schema's central claim reproduced in
+the negative: backtest+search transfer downmarket; paradigm breaks don't.
+Next per Urs: try gemma26 (run gemma1), same game, same rules.
