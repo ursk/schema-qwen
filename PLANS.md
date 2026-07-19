@@ -312,3 +312,48 @@ Experiment ladder this enables, cheapest-first, same game (LS20):
 - qwen36 ANALYZE-only (does it think to build itself vision when told it can?)
 - gptoss120 ANALYZE-only (ditto for the disciplined prober)
 - human blind baseline (Urs, n=1, priceless)
+
+## Result: qwen36 --coached --vision on LS20 (2026-07-18/19, run vis1)
+
+Overnight: 27 deliberations, 85 actions, 908 LLM calls, ~2.8M generated
+tokens, 7 green backtests (max exact on 42 transitions), 3 surprises, 0
+GAME_OVERs — level 0/7. Viewer was live at /schema.
+
+**Perception is solved — the sighted harness worked.** Turn 1 opened with a
+correct object inventory (vs the bake-off's "color cycling"). By deliberation
+13 the model had: the 5x5 two-tone avatar, the full action->(dx,dy) control
+map (1:Up 2:Down 3:Left 4:Right, 5 cells/step), walls, and the budget bar's
+erosion rule — all verified green on 37+ transitions. It even wrote its own
+get_connected_components() INSIDE world_model.py and represented state as
+objects. The representational leap that blind qwen36 and 133 gpt-oss
+deliberations never made happened in under an hour with eyes. Best-of-N also
+finally did real work (candidate scores like {2, 126, 2} -> adopt 2).
+
+**The next bottleneck is now cleanly exposed: goal discovery + planning
+initiation. Zero PLAN calls in 11 hours despite repeated greens.** Green never
+converted into search because (a) the model treats green as license to keep
+probing, and (b) is_goal is only ever constrained by level-up events, of
+which there were none — chicken-and-egg: no goal evidence without clearing a
+level, no clearing without a goal hypothesis it trusts. It committed hard to
+one wrong goal theory ("erode the b bar to zero = win"), got a clean refutation
+(bar emptied, nothing happened), and — unlike gpt-oss — revised honestly
+("goal might be to reach the 8s"). No paradigm lock; it just ran out of night.
+
+Harness warts observed: backtest on 0 transitions reports GREEN (vacuous,
+unlocks PLAN inside fantasy); 171 red backtests = lots of churn the champion/
+restore machinery absorbed correctly.
+
+**Next scaffold iteration (quick-iteration mode, Urs 2026-07-19):**
+1. AUTO-BFS on green — when a backtest goes green, the harness immediately
+   runs BFS inside the certified model and reports the result unprompted
+   ("plan found: ..." / "NO goal reachable — your is_goal is untested or
+   wrong"). Pure automation of an existing tool, no knowledge injected; turns
+   green into an actionable signal and makes is_goal falsifiable every time.
+2. GOAL slot — like notes but dedicated and mandatory: current goal
+   hypothesis + evidence for/against, shown every turn, must be revised when
+   refuted. (Generalizes the parked gestalt-priming idea, minus the genre
+   knowledge.)
+3. Vacuous-green fix: 0-transition backtest reports "no data yet", not GREEN.
+4. Consider: after N consecutive green deliberations with no PLAN, the
+   harness nudges ("you have a verified model and N untested goal theories —
+   PLAN or state why not").
