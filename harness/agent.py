@@ -40,7 +40,12 @@ class LLM:
             "max_tokens": self.max_tokens,
             "temperature": self.temperature if temperature is None else temperature,
             "stream": True,
-            "chat_template_kwargs": {"enable_thinking": False},
+            # preserve_thinking keeps the empty <think> scaffold when the
+            # template re-renders history, so each turn's prompt is a byte
+            # extension of the lived token stream — exact prefix-cache
+            # continuation on any backend, no rewind needed (2026-07-19)
+            "chat_template_kwargs": {"enable_thinking": False,
+                                     "preserve_thinking": True},
         }
         if seed is not None:
             payload["seed"] = seed
