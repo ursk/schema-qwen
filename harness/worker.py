@@ -180,6 +180,42 @@ def cmd_bfs(ns, segments, args):
             "note": "no goal state found within search limits"}
 
 
+def cmd_analyze(code_path, timeline_path):
+    """Run agent-written analysis code READ-ONLY over the timeline; return stdout.
+
+    A REPL over the agent's own memory: no game internals, no world-model
+    coupling — the code sees exactly what the agent has already observed,
+    plus the vision helpers so it can compute shapes instead of eyeballing hex.
+    """
+    import contextlib
+    import io
+
+    from harness import vision
+
+    with open(timeline_path) as f:
+        events = [json.loads(line) for line in f if line.strip()]
+    with open(code_path) as f:
+        code = f.read()
+    g = {
+        "events": events,
+        "components": vision.components,
+        "describe": vision.describe,
+        "flow": vision.flow,
+        "HEX": vision.HEX,
+    }
+    buf = io.StringIO()
+    err = None
+    try:
+        with contextlib.redirect_stdout(buf):
+            exec(compile(code, "analysis.py", "exec"), g)
+    except Exception:
+        err = traceback.format_exc(limit=4)
+    out = buf.getvalue()
+    if len(out) > 6000:
+        out = out[:6000] + "\n...[stdout truncated at 6000 chars]"
+    return {"ok": err is None, "stdout": out, **({"error": err} if err else {})}
+
+
 def cmd_predict(ns, segments, args):
     """Predict grids for a plan from the current state (for execution checks)."""
     plan = args["plan"]
@@ -203,6 +239,10 @@ def main():
     from harness.timeline import Timeline
 
     try:
+        if cmd == "analyze":
+            # analysis code needs no world model — model_path is the code file
+            print(json.dumps(cmd_analyze(model_path, timeline_path)))
+            return
         ns = load_model(model_path)
         segments = Timeline(timeline_path).segments()
         if not segments:

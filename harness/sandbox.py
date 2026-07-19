@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-TIMEOUTS = {"backtest": 90, "bfs": 150, "predict": 60}
+TIMEOUTS = {"backtest": 90, "bfs": 150, "predict": 60, "analyze": 60}
 
 
 def run_worker(cmd, model_path, timeline_path, args=None):

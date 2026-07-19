@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .agent import Agent, ClaudeCLI, LLM
+from .agent import Agent, ClaudeCLI, HumanCLI, LLM
 from .envio import BudgetExceeded, Env
 from .timeline import Timeline
 
@@ -34,6 +34,9 @@ def main():
     ap.add_argument("--run-name", default=None)
     ap.add_argument("--coached", action="store_true",
                     help="use the genre-coached system prompt (A/B vs the plain one)")
+    ap.add_argument("--vision", action="store_true",
+                    help="sighted harness: object decomposition of the grid + "
+                         "optic-flow transition rendering (documented deviation)")
     ap.add_argument("--from-ckpt", default=None,
                     help="seed the run dir from a named checkpoint (any model "
                          "may continue any player's checkpoint)")
@@ -53,18 +56,26 @@ def main():
 
     timeline = Timeline(run_dir / "timeline.jsonl")
     env = Env(args.game, timeline, max_actions=args.max_actions)
-    if args.model.startswith("cc:"):
+    if args.model == "human":
+        # blind-play adapter: a human at the terminal, same protocol as the models
+        llm = HumanCLI()
+        args.samples = 1
+    elif args.model.startswith("cc:"):
         # cc:opus etc — headless Claude Code, like the nightly Opus jobs
         llm = ClaudeCLI(args.model[3:], max_tokens=args.max_tokens)
     else:
         llm = LLM(args.base_url, args.model, max_tokens=args.max_tokens)
-    from .prompts import SYSTEM, SYSTEM_COACHED
+    from .prompts import SYSTEM, SYSTEM_COACHED, VISION_NOTE
+    system = SYSTEM_COACHED if args.coached else SYSTEM
+    if args.vision:
+        system += VISION_NOTE
     agent = Agent(env, timeline, llm, run_dir, log, samples=args.samples,
-                  system=SYSTEM_COACHED if args.coached else SYSTEM)
+                  system=system, vision=args.vision)
 
     env.reset()
     print(f"[{args.game}] started · {env.win_levels} levels · run dir {run_dir}")
-    log("start", {"game": args.game, "model": args.model, "win_levels": env.win_levels, "coached": args.coached})
+    log("start", {"game": args.game, "model": args.model, "win_levels": env.win_levels,
+                  "coached": args.coached, "vision": args.vision})
 
     extra = ""
     for d in range(args.max_deliberations):

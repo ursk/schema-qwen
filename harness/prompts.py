@@ -65,6 +65,18 @@ rules. `COMMIT: RESET` restarts the level.
 5. REVERT
 Restore your best-scoring world model so far (the harness tracks it).
 
+6. ANALYZE — a line `ANALYZE` followed by a python code block:
+```python
+# runs READ-ONLY over your full recorded history; you get back what you print()
+for ev in events:      # [{i, action, grid, level, state}, ...] — every real transition
+    ...                # ev["grid"] is the 64x64 int grid AFTER ev["action"] (None = initial)
+print(describe(events[-1]["grid"]))   # helper: connected-block decomposition
+print(flow(events[0]["grid"], events[1]["grid"]))  # helper: change map + movement detection
+```
+Do NOT eyeball hex for structure — compute it. ANALYZE is how you find object shapes, \
+track things across steps, and tabulate what each action does. Stdlib only; it never \
+changes your world model or the game.
+
 You may also include lines starting with `NOTE: ` anywhere — they are appended to \
 your persistent notes.
 
@@ -133,6 +145,21 @@ forever. Its font is deterministic: collect (value, glyph) pairs from history \
 and hard-code the mapping.
 - is_goal is a hypothesis like any other: propose it early, test it by \
 reaching the hypothesized configuration, revise when the level does not end.
+"""
+
+# --vision variant: appended to the system prompt when the sighted harness is on
+VISION_NOTE = """
+PERCEPTION FEED (this run only)
+- Alongside the raw grid you get OBJECTS: a connected-block decomposition of the \
+current grid (color, size, position, shape stencil), computed by the harness from \
+the same grid you see.
+- Every transition is reported as a sparse CHANGE MAP in grid space ('.' = \
+unchanged, BEFORE -> AFTER within the changed bbox) plus MOVEMENT lines when the \
+changed cells are consistent with an object translating. A block of cells \
+vanishing at one place and an identical block appearing nearby IS an object \
+moving — treat detected movement as strong evidence.
+- These are exact, deterministic computations on your own observations. Build \
+your world model in terms of the objects they reveal, not individual cells.
 """
 
 SYSTEM_COACHED = SYSTEM.replace(

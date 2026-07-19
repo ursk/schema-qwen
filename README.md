@@ -93,6 +93,35 @@ anyone running Schema-style loops on small models:
    samples came back byte-identical — best-of-4 was silently a no-op. The
    sampler now sends distinct per-sample seeds and a small temperature ladder.
 
+## Perception affordances (documented deviations from published Schema)
+
+Schema's published deliberation offers exactly write_code / run_backtest /
+run_bfs; observations are raw grids + cell-list diffs. The bake-off showed
+every model eyeballing hex in-head — and misreading translation as "color
+cycling" — despite having Python. Two additions attack that, at different
+levels of assistance (added 2026-07-18):
+
+- **`ANALYZE` (always on)** — a REPL over the agent's own memory: the model
+  submits a python block that runs read-only over the recorded timeline
+  (`events` + `describe`/`flow`/`components` helpers) and gets its stdout
+  back. No perception is done for it — whether the model *thinks to build
+  itself vision* becomes part of what's measured.
+- **`--vision` (flag)** — the sighted harness: the prompt itself carries an
+  OBJECTS section (connected-block decomposition: rects one-liners, small
+  shapes as stencils) and every transition is rendered as a sparse change map
+  in grid space ('.' = unchanged, BEFORE -> AFTER within the changed bbox)
+  plus MOVEMENT lines when changed cells are consistent with an object
+  translating. Pure deterministic preprocessing of the agent's own
+  observations, but it moves Schema's Level-1 state grounding into the
+  harness.
+
+A/B-ing `--vision` against ANALYZE-only separates "the models lack eyes" from
+"the models lack the idea of building eyes".
+
+**`--model human`** — blind-play adapter: prints the exact situation text to
+the terminal and reads protocol replies from stdin (end with a line `GO`), so
+a human subject plays under precisely the models' constraints.
+
 ## Layout
 
 - `harness/timeline.py` — append-only transition log, level segmentation
@@ -101,6 +130,7 @@ anyone running Schema-style loops on small models:
 - `harness/agent.py` — deliberation loop, text protocol (no tool-calls: local
   models are fragile there), context compaction
 - `harness/prompts.py` — the physicist system prompt + world-model contract
+- `harness/vision.py` — block decomposition + sparse optic flow (see above)
 - `harness/envio.py` — ARC-AGI-3 env wrapper (`arc-agi` toolkit, runs games locally)
 - `harness/run.py` — outer observe→deliberate→execute→record loop
 

@@ -286,3 +286,29 @@ forward, stack-ranked: (1) finish the local capability map (gemma1 running),
 (3) the E1 synthetic-curriculum training ladder — under the no-cheating rule,
 changing the MODEL via training on procedural games with clean provenance is
 fair; inference-time scaffolds and priming are not.
+
+## The perception turn (2026-07-18, post-bake-off)
+
+Insight from reviewing the bake-off with Urs: the situation prompt already
+contains everything (grid, exact diffs, mismatch before-values), but every
+model — Qwen through Opus — eyeballs the hex in-head instead of computing over
+it, which is exactly where "color cycling" gestalts come from. The models have
+Python; the harness gave them nowhere to run it except inside the backtest,
+whose stdout goes nowhere. Affordance gap, not capability gap (hypothesis).
+
+Built (see README "Perception affordances", all documented deviations):
+1. `ANALYZE` — read-only python over the recorded timeline, stdout returned.
+   The fair-play REPL: vision is available but must be *chosen and built*.
+2. `--vision` — sighted harness: OBJECTS decomposition in the prompt + every
+   transition as a sparse in-grid change map + MOVEMENT translation detection
+   (verified on the bake-off timelines: one transition suffices to read off
+   the 5x5 two-tone avatar and the action→(dx,dy) mapping, e.g. 1 → dy=-5).
+3. `--model human` — blind-play adapter (stdin/stdout, same protocol). The
+   deal: Urs plays the blind game now that the sighted harness exists.
+
+Experiment ladder this enables, cheapest-first, same game (LS20):
+- qwen36 --vision (does perception alone unlock the representational leap
+  that 133 gpt-oss deliberations never made?)
+- qwen36 ANALYZE-only (does it think to build itself vision when told it can?)
+- gptoss120 ANALYZE-only (ditto for the disciplined prober)
+- human blind baseline (Urs, n=1, priceless)

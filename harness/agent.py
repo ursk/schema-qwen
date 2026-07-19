@@ -9,6 +9,7 @@ import httpx
 
 from .grids import grid_to_text, diff_summary
 from .prompts import SYSTEM, action_semantics
+from .vision import describe as vision_describe, flow as vision_flow
 from .sandbox import run_worker
 
 CODE_RE = re.compile(r"```python\s*\n(.*?)```", re.S)
@@ -16,6 +17,7 @@ COMMIT_RE = re.compile(r"^\s*COMMIT:\s*(.+?)\s*$", re.M)
 COMMIT_PLAN_RE = re.compile(r"^\s*COMMIT PLAN\s*$", re.M)
 PLAN_RE = re.compile(r"^\s*PLAN\s*$", re.M)
 NOTE_RE = re.compile(r"^\s*NOTE:\s*(.+?)\s*$", re.M)
+ANALYZE_RE = re.compile(r"^\s*ANALYZE\s*$", re.M)
 ACTION_TOKEN_RE = re.compile(r"^(RESET|[123457]|6@\d{1,2},\d{1,2})$")
 
 
@@ -219,6 +221,44 @@ class ClaudeCLI:
         ]
 
 
+class HumanCLI:
+    """Blind-play adapter: prints the exact situation the models get to the
+    terminal and reads the reply from stdin — same protocol, same constraints.
+    End each reply with a line containing only: GO
+    """
+
+    def __init__(self):
+        self.calls = 0
+        self.max_tokens = 1 << 30  # never flag token_budget anomalies
+        self._sys_shown = False
+
+    def chat(self, messages, on_delta=None):
+        self.calls += 1
+        if not self._sys_shown:
+            print("\n" + "#" * 78 + "\n# SYSTEM PROMPT\n" + "#" * 78)
+            print(messages[0]["content"])
+            self._sys_shown = True
+        print("\n" + "#" * 78 + "\n# HARNESS — reply below, end with a line: GO\n" + "#" * 78)
+        print(messages[-1]["content"])
+        lines = []
+        while True:
+            try:
+                ln = input()
+            except EOFError:
+                break
+            if ln.strip() == "GO":
+                break
+            lines.append(ln)
+        text = "\n".join(lines)
+        if on_delta:
+            on_delta(text)
+        return {"text": text, "chunks": max(1, len(text) // 4), "retries": 0}
+
+    def chat_n(self, messages, n, on_deltas=None):
+        # a human is always samples=1
+        return [self.chat(messages, (lambda c: on_deltas(0, c)) if on_deltas else None)]
+
+
 def _is_looping(text, min_repeats=4):
     """Detect degenerate repetition: the tail is the same 1-4 line block repeated."""
     lines = [ln for ln in text.splitlines() if ln.strip()][-24:]
@@ -248,8 +288,9 @@ def _is_looping(text, min_repeats=4):
 class Agent:
     def __init__(self, env, timeline, llm, run_dir: Path, log,
                  max_deliberation_turns=14, context_char_budget=60000, samples=4,
-                 system=SYSTEM):
+                 system=SYSTEM, vision=False):
         self.system = system
+        self.vision = vision
         self.env = env
         self.timeline = timeline
         self.llm = llm
@@ -378,7 +419,23 @@ class Agent:
         else:
             parts.append("YOU HAVE NO WORLD MODEL YET.")
         if self.recent_events:
-            lines = [f"  after {a}: {s}" for a, s in self.recent_events[-20:]]
+            lines = []
+            recent = self.recent_events[-20:]
+            for j, (a, s) in enumerate(recent):
+                # vision flow summaries are multi-line; keep full change maps
+                # only for the last few, older ones shrink to head + MOVEMENT
+                if "\n" in s and len(recent) - j > 6:
+                    head = []
+                    for ln in s.splitlines():
+                        if "change map" in ln:
+                            break
+                        head.append(ln)
+                    s = "\n".join(head)
+                if "\n" in s:
+                    lines.append(f"  after {a}:\n" + "\n".join(
+                        "    " + ln for ln in s.splitlines()))
+                else:
+                    lines.append(f"  after {a}: {s}")
             parts.append("RECENT TRANSITIONS (newest last):\n" + "\n".join(lines))
         bt = ("no world model yet" if not wm else
               "GREEN (reproduces all recorded transitions)" if self.backtest_green
@@ -389,6 +446,9 @@ class Agent:
             f"backtest {bt}"
         )
         parts.append(f"CURRENT GRID (hex colors, x -> right, y -> down):\n{grid_to_text(cur['grid'])}")
+        if self.vision:
+            parts.append("OBJECTS (connected-block decomposition of the current "
+                         f"grid, computed by the harness):\n{vision_describe(cur['grid'])}")
         if extra:
             parts.append(extra)
         parts.append("Decide your next command.")
@@ -466,6 +526,21 @@ class Agent:
             )
         return "\n".join(lines)
 
+    def do_analyze(self, code):
+        """Run agent-written analysis code read-only over the timeline."""
+        p = self.run_dir / "_analysis.py"
+        p.write_text(code)
+        rep = run_worker("analyze", p, self.timeline.path)
+        self.log("analyze", {"ok": rep.get("ok"),
+                             "stdout_chars": len(rep.get("stdout") or "")})
+        out = rep.get("stdout") or ""
+        if "stdout" not in rep:  # worker crash / timeout, code never ran
+            return f"ANALYZE failed: {rep.get('error', 'unknown worker failure')}"
+        tail = f"\n[your code raised]\n{rep['error']}" if rep.get("error") else ""
+        if not out and not tail:
+            out = "(no output — use print() to see results)"
+        return "ANALYZE stdout:\n" + out + tail
+
     def do_plan(self):
         if not self.world_model():
             return "No world model yet — write one first."
@@ -498,7 +573,8 @@ class Agent:
         for i, a in enumerate(actions):
             before = self.timeline.events[-1]["grid"]
             ev = self.env.act(a)
-            summ = diff_summary(before, ev["grid"])
+            summ = (vision_flow(before, ev["grid"]) if self.vision
+                    else diff_summary(before, ev["grid"]))
             self.recent_events.append((a, summ))
             leveled = ev["level"] > start_level
             if ev["state"] == "WIN":
@@ -622,6 +698,9 @@ class Agent:
                 with open(self.notes_path, "a") as f:
                     f.write(note + "\n")
         code_blocks = CODE_RE.findall(text)
+        # an ANALYZE line claims the code block for read-only analysis, not the model
+        if code_blocks and ANALYZE_RE.search(text):
+            return "analyze", code_blocks[-1]
         # an explicit COMMIT outranks a code block that doesn't change the model
         # (weak models love pasting the current model back while narrating a probe)
         if code_blocks:
@@ -702,6 +781,8 @@ class Agent:
             self._last_wm_delta = None
             if kind == "code":
                 result = self.do_write_model(payload)
+            elif kind == "analyze":
+                result = self.do_analyze(payload)
             elif kind == "plan":
                 result = self.do_plan()
             elif kind == "commit_plan":
