@@ -100,6 +100,8 @@ def humanize(e):
         return f"{ts} 🏆 GAME WON in {d.get('actions')} actions ({d.get('llm_calls')} llm calls)"
     if k == "stop":
         return f"{ts} ■ stopped: {d.get('reason')}"
+    if k == "aborted":
+        return f"{ts} ✖ ABORTED: {d.get('reason')}"
     return None
 
 PAGE = """<!doctype html>
@@ -430,8 +432,10 @@ function chips(s) {
     `<span class="chip">llm calls <b>${s.llm_calls ?? 0}</b></span>` +
     `<span class="chip ${bt[1]}">backtest <b>${bt[0]}</b></span>` +
     `<span class="chip">deliberation <b>${s.deliberation ?? 0}</b></span>`;
-  document.getElementById("substat").textContent =
+  const sub = document.getElementById("substat");
+  sub.textContent =
     s.finished ? `run finished: ${s.finished}` : "run live · updates every 1.5s";
+  sub.style.color = (s.finished || "").startsWith("ABORTED") ? "var(--critical)" : "";
   document.getElementById("dot").className = "dot" + (s.finished ? "" : " live");
 }
 scrub.oninput = () => { follow.checked = false; draw(+scrub.value); };
@@ -590,6 +594,9 @@ class Handler(BaseHTTPRequestHandler):
                         stats["game"] = d.get("game")
                         stats["model"] = d.get("model")
                         stats["win_levels"] = d.get("win_levels")
+                        # a restart into the same run dir supersedes any
+                        # earlier stop/abort in the event log
+                        stats["finished"] = None
                     elif k == "llm":
                         stats["llm_calls"] += 1
                     elif k == "backtest":
@@ -602,6 +609,8 @@ class Handler(BaseHTTPRequestHandler):
                         stats["finished"] = "WIN"
                     elif k == "stop":
                         stats["finished"] = d.get("reason")
+                    elif k == "aborted":
+                        stats["finished"] = f"ABORTED: {d.get('reason')}"
                     if k == "turn":
                         turns.append(d)
                     if i >= feed_since:

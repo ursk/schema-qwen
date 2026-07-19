@@ -8,15 +8,25 @@ Usage:
 
 import argparse
 import json
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .agent import Agent, ClaudeCLI, HumanCLI, LLM
 from .envio import BudgetExceeded, Env
+from .notify import abort_run
 from .timeline import Timeline
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# Fail-loud guard: this many consecutive deliberations without a single
+# committed action aborts the run (Telegram + ABORTED.md via notify).
+# Sized against real work: healthy runs show isolated single no-commit
+# turns; three in a row has only ever meant a degenerate loop (vis2
+# 2026-07-19: three straight turns burning the full token budget on
+# repetition, zero moves).
+MAX_NONE_STREAK = 3
 
 
 def main():
@@ -78,6 +88,7 @@ def main():
                   "coached": args.coached, "vision": args.vision})
 
     extra = ""
+    none_streak = 0
     for d in range(args.max_deliberations):
         try:
             result = agent.deliberate(extra)
@@ -85,6 +96,20 @@ def main():
             print(f"STOP: {e}")
             log("stop", {"reason": str(e)})
             break
+        except Exception as e:
+            # anything unexpected must reach the human, not die silently
+            # in a nohup file
+            abort_run(run_dir, log, f"unhandled exception in deliberation {d}: {e!r}")
+            raise
+        none_streak = none_streak + 1 if result is None else 0
+        if none_streak >= MAX_NONE_STREAK:
+            reason = (f"{none_streak} consecutive deliberations with no committed "
+                      f"action (deliberation {d}, level {env.level}, "
+                      f"{timeline.action_count} actions) — degenerate loop, "
+                      f"check sampling params / backend")
+            print(f"ABORT: {reason}")
+            abort_run(run_dir, log, reason)
+            sys.exit(2)
         if env.state == "WIN":
             print(f"WIN after {timeline.action_count} actions, {llm.calls} llm calls")
             log("win", {"actions": timeline.action_count, "llm_calls": llm.calls})

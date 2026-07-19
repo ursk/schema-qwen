@@ -23,7 +23,7 @@ ACTION_TOKEN_RE = re.compile(r"^(RESET|[123457]|6@\d{1,2},\d{1,2})$")
 
 
 class LLM:
-    def __init__(self, base_url, model, max_tokens=4096, temperature=0.7):
+    def __init__(self, base_url, model, max_tokens=4096, temperature=0.6):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.max_tokens = max_tokens
@@ -39,6 +39,12 @@ class LLM:
             "messages": messages,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature if temperature is None else temperature,
+            # Qwen3-family thinking-mode guidance: temp 0.6, and raise
+            # presence_penalty toward 1.5 for quantized models when endless
+            # repetition occurs. vis2 2026-07-19 hit exactly that (three
+            # straight turns of full-budget repetition, loop guard firing,
+            # zero commits) with every anti-repetition sampler at default 0.
+            "presence_penalty": 1.5,
             "stream": True,
             # thinking ON (2026-07-19, Urs): it's a reasoning model — let it
             # reason. History renders think-stripped (template default), so
