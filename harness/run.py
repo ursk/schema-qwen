@@ -50,6 +50,12 @@ def main():
     ap.add_argument("--from-ckpt", default=None,
                     help="seed the run dir from a named checkpoint (any model "
                          "may continue any player's checkpoint)")
+    ap.add_argument("--resume", action="store_true",
+                    help="deliberately continue an existing run dir, carrying "
+                         "over world_model/notes/timeline. Without this flag a "
+                         "non-empty run dir is an error: fresh start is the "
+                         "default (carried-over state can poison a new/fixed "
+                         "model and dirties comparisons).")
     args = ap.parse_args()
 
     stamp = args.run_name or datetime.now(timezone.utc).strftime("%m%d-%H%M%S")
@@ -57,6 +63,14 @@ def main():
     if args.from_ckpt:
         from .checkpoint import seed
         seed(args.from_ckpt, run_dir)
+    prior = [f for f in ("timeline.jsonl", "events.jsonl", "world_model.py", "notes.md")
+             if (run_dir / f).exists()] if not args.from_ckpt else []
+    if prior and not args.resume:
+        sys.exit(f"{run_dir} already holds run state ({', '.join(prior)}).\n"
+                 "Fresh start is the default: pick a new --run-name, or pass "
+                 "--resume to deliberately continue this run, or snapshot it "
+                 "first (python -m harness.checkpoint save <run_dir> <name>) "
+                 "and seed a fresh dir with --from-ckpt.")
     run_dir.mkdir(parents=True, exist_ok=True)
     events_path = run_dir / "events.jsonl"
 
@@ -85,7 +99,9 @@ def main():
     env.reset()
     print(f"[{args.game}] started · {env.win_levels} levels · run dir {run_dir}")
     log("start", {"game": args.game, "model": args.model, "win_levels": env.win_levels,
-                  "coached": args.coached, "vision": args.vision})
+                  "coached": args.coached, "vision": args.vision,
+                  # lineage marker: True = carried-over run dir, not a clean start
+                  "resumed": bool(args.resume and prior)})
 
     extra = ""
     none_streak = 0
