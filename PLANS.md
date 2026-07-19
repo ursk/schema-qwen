@@ -357,3 +357,22 @@ restore machinery absorbed correctly.
 4. Consider: after N consecutive green deliberations with no PLAN, the
    harness nudges ("you have a verified model and N untested goal theories —
    PLAN or state why not").
+
+## Cache-hit investigation → backend switch (2026-07-19)
+
+vis2 paused mid-morning to chase abysmal prefix-cache hits (6.7%) on vllm-mlx
+qwen36. Root cause chain: (a) qwen3.6 is hybrid (30/40 GDN layers, state
+can't rewind) so only exact-prefix cache hits are possible; (b) the server's
+think-suffix stripping computes S=2 but our default enable_thinking:false
+renders a 4-token empty-think suffix — every stored key carries a 2-token
+residue, so append-continuation (every deliberation turn) never matches and
+re-prefills ~10k tokens; (c) latent: SSM layer state is silently untrimmed at
+store time, so fixing (b) alone would serve subtly corrupted continuations.
+An earlier "template re-renders history" hypothesis was tested and retracted
+(dormant for our traffic shape — no reasoning_content in messages).
+
+Resolution: schema runs moved to qwen36-gguf (llama.cpp slot cache +
+recurrent checkpoints): measured 26/949 tokens processed on append-
+continuation (~97% reuse), 75 tok/s single-stream decode. Plist gained
+--parallel 2 / -c 131072; runs use --samples 2. vllm-mlx MLLM fix parked as
+a follow-up (matters for Moss/digest). vis2 resumed on gguf, same run dir.
