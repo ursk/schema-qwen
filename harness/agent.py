@@ -40,12 +40,10 @@ class LLM:
             "max_tokens": self.max_tokens,
             "temperature": self.temperature if temperature is None else temperature,
             "stream": True,
-            # preserve_thinking keeps the empty <think> scaffold when the
-            # template re-renders history, so each turn's prompt is a byte
-            # extension of the lived token stream — exact prefix-cache
-            # continuation on any backend, no rewind needed (2026-07-19)
-            "chat_template_kwargs": {"enable_thinking": False,
-                                     "preserve_thinking": True},
+            # thinking ON (2026-07-19, Urs): it's a reasoning model — let it
+            # reason. History renders think-stripped (template default), so
+            # the cache re-prefills only turn N's stripped reply each turn.
+            "chat_template_kwargs": {"enable_thinking": True},
         }
         if seed is not None:
             payload["seed"] = seed
@@ -68,6 +66,12 @@ class LLM:
                 # the final channel; a no-op for models without the marker.
                 if "assistantfinal" in text:
                     text = text.split("assistantfinal")[-1]
+                # backends without a reasoning parser leave <think> inline in
+                # content — strip closed blocks; an unclosed block means the
+                # whole tail is reasoning (budget hit), drop it too
+                if "<think>" in text:
+                    text = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.S)
+                    text = text.split("<think>")[0]
                 return {"text": text, "chunks": chunks, "retries": attempt}
             except (httpx.HTTPStatusError, httpx.TransportError) as e:
                 # a 400 with chat_template_kwargs set is usually a template that
@@ -132,7 +136,16 @@ class LLM:
         return results
 
     def _stream_once(self, payload, on_delta):
-        chunks = []
+        """Returns (reply_text, generated_token_count).
+
+        Reasoning deltas (reasoning_content) stream to on_delta (trace
+        visibility) and count toward generation/loop detection, but are NOT
+        part of the returned reply text — a COMMIT inside a think trace must
+        never execute. Backends that leave <think> inline in content are
+        handled by the strip in chat()."""
+        content = []
+        n_total = 0
+        combined = []  # content + reasoning, for loop detection
         with self.client.stream(
             "POST", f"{self.base_url}/chat/completions", json=payload
         ) as r:
@@ -144,20 +157,29 @@ class LLM:
                 if data.strip() == "[DONE]":
                     break
                 try:
-                    delta = json.loads(data)["choices"][0]["delta"].get("content") or ""
+                    delta = json.loads(data)["choices"][0]["delta"]
                 except (KeyError, IndexError, json.JSONDecodeError):
                     continue
-                if not delta:
+                reason = delta.get("reasoning_content") or ""
+                text = delta.get("content") or ""
+                if not reason and not text:
                     continue
-                chunks.append(delta)
-                if on_delta:
-                    on_delta(delta)
-                if len(chunks) % 32 == 0 and _is_looping("".join(chunks)):
+                n_total += 1
+                if reason:
+                    combined.append(reason)
+                    if on_delta:
+                        on_delta(reason)
+                if text:
+                    content.append(text)
+                    combined.append(text)
+                    if on_delta:
+                        on_delta(text)
+                if n_total % 32 == 0 and _is_looping("".join(combined)):
                     msg = "\n[TRUNCATED BY HARNESS: your output was repeating in a loop]"
                     if on_delta:
                         on_delta(msg + "\n")
-                    return "".join(chunks) + msg, len(chunks)
-        return "".join(chunks), len(chunks)
+                    return "".join(content) + msg, n_total
+        return "".join(content), n_total
 
 
 class ClaudeCLI:
