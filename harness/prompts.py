@@ -38,7 +38,8 @@ def is_goal(state):
     ...
 ```
 The harness saves it and immediately backtests it against EVERY recorded transition. \
-You will get either "backtest GREEN" or the first mismatches with exact cells. \
+You will get either "backtest GREEN" or a summary of mismatching steps — counts and \
+regions only, never per-cell values (inspect those via ANALYZE's `backtest` array). \
 State can be any JSON-able structure — invent whatever variables the game needs \
 (positions, counters, budgets), and keep only what matters; a state that is just \
 the raw grid usually cannot capture hidden variables.
@@ -75,10 +76,17 @@ for ev in events:      # [{i, action, grid, level, state}, ...] — every real t
     ...                # ev["grid"] is the 64x64 int grid AFTER ev["action"] (None = initial)
 print(describe(events[-1]["grid"]))   # helper: connected-block decomposition
 print(flow(events[0]["grid"], events[1]["grid"]))  # helper: change map + movement detection
+# `backtest` = your latest backtest report (None before the first one):
+#   backtest["mismatches"][i] = {step_i, action, n_cells,
+#                                cells: [[x, y, was, predicted, real], ...]}
+for m in (backtest or {}).get("mismatches", [])[:3]:
+    print(m["step_i"], m["action"], m["cells"][:5])
 ```
 Do NOT eyeball hex for structure — compute it. ANALYZE is how you find object shapes, \
 track things across steps, and tabulate what each action does. Stdlib only; it never \
-changes your world model or the game.
+changes your world model or the game. When you need ground truth about specific \
+cells, ALWAYS print it here from `events` or `backtest` — never count characters \
+in the grid text by hand; hand-counted indices are how you get stuck.
 
 You may also include lines starting with `NOTE: ` anywhere — they are appended to \
 your persistent notes.

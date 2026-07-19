@@ -359,6 +359,7 @@ class Agent:
             rep = run_worker("backtest", self.model_path, self.timeline.path)
             self.backtest_green = (bool(rep.get("ok"))
                                    and rep.get("transitions_checked", 0) > 0)
+            (self.run_dir / "backtest.json").write_text(json.dumps(rep))
             if rep.get("total_wrong_cells") is not None:
                 self.last_score = rep["total_wrong_cells"]
 
@@ -520,7 +521,13 @@ class Agent:
         rep = run_worker("backtest", self.model_path, self.timeline.path)
         # a green on zero transitions is vacuous — it must not unlock PLAN
         self.backtest_green = bool(rep.get("ok")) and rep.get("transitions_checked", 0) > 0
-        self.log("backtest", rep)
+        # the full structured report goes to disk for ANALYZE (`backtest`
+        # variable); the event log and the prompt only ever carry aggregates —
+        # per-cell values reach the model exclusively through code it writes
+        (self.run_dir / "backtest.json").write_text(json.dumps(rep))
+        self.log("backtest", {k: rep.get(k) for k in (
+            "ok", "transitions_checked", "n_mismatches", "total_wrong_cells",
+            "n_goal_misses", "n_bad_cells", "error")})
         if rep.get("ok") and not self.backtest_green:
             return ("world_model.py saved, but there are NO recorded transitions yet — "
                     "the backtest is vacuous and proves nothing. Probe reality first "
@@ -555,21 +562,36 @@ class Agent:
         lines = [f"world_model.py saved. backtest RED: {rep.get('n_mismatches')} mismatching "
                  f"transitions out of {rep.get('transitions_checked')}. {score_note} First mismatches:"]
         n_bad = rep.get("n_bad_cells")
+
+        def bbox(pts):
+            xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+            return f"x[{min(xs)}..{max(xs)}] y[{min(ys)}..{max(ys)}]"
+
         if n_bad and n_bad <= 16 and not rep.get("n_goal_misses"):
-            cells = ", ".join(f"({x},{y})" for x, y in rep.get("bad_cells", []))
             lines.append(
                 f"HINT: all mismatches are confined to just {n_bad} distinct cell(s) "
-                f"[{cells}]. Whatever lives there (a counter? a HUD glyph?) is "
-                f"deterministic and CAN be modeled — decode it from the recorded "
-                f"history to reach GREEN. It may even encode the goal."
+                f"inside {bbox(rep.get('bad_cells', []))}. Whatever lives there (a "
+                f"counter? a HUD glyph?) is deterministic and CAN be modeled — decode "
+                f"it from the recorded history to reach GREEN. It may even encode the goal."
             )
-        for m in mm:
+        # regions and counts only — never per-cell values (they tempt the
+        # model into hand-counting grid text; ground truth lives in ANALYZE)
+        for m in mm[:8]:
             if m.get("kind") == "grid":
-                lines.append(f"- step {m.get('step_i')} (action {m.get('action')}): "
-                             f"{m.get('n_cells')} wrong cells ({m.get('breakdown', '')}); "
-                             + "; ".join(m.get("cells", [])[:6]))
+                where = f" in {bbox(m['cells'])}" if m.get("cells") else ""
+                lines.append(
+                    f"- step {m.get('step_i')} (action {m.get('action')}): "
+                    f"{m.get('n_cells')} wrong cells{where} — "
+                    f"{m.get('over', 0)} you changed but reality didn't, "
+                    f"{m.get('missed', 0)} reality changed but you didn't, "
+                    f"{m.get('wrong', 0)} both changed differently")
             else:
                 lines.append(f"- step {m.get('step_i')} (action {m.get('action')}): {m.get('detail')}")
+        lines.append(
+            "No cell values are listed on purpose — do NOT re-read the grid text to "
+            "recover them. Run ANALYZE and print what you need: the full mismatch "
+            "array is available there as `backtest` "
+            "(mismatches[i]['cells'] = [[x, y, was, predicted, real], ...]).")
         lines.append("Revise init_state/step/render (or is_goal) to explain these, then resubmit.")
         if self.timeline.action_count < 12:
             lines.append(

@@ -39,7 +39,7 @@ def state_key(ns, state):
         return repr(state)
 
 
-def fold_segment(ns, seg, check=True, max_report=6):
+def fold_segment(ns, seg, check=True, max_report=64):
     """Fold a timeline segment through the model.
 
     Returns (final_state, report) where report lists mismatches:
@@ -93,15 +93,12 @@ def fold_segment(ns, seg, check=True, max_report=6):
                     mismatches.append({
                         "step_i": ev["i"], "action": ev["action"], "kind": "grid",
                         "n_cells": len(bad),
-                        "breakdown": (
-                            f"{over} cells your model changed but reality did NOT; "
-                            f"{missed} cells reality changed but your model did NOT; "
-                            f"{wrong} cells both changed, to different colors"
-                        ),
-                        "cells": [
-                            f"({x},{y}) was {b}: predicted {p}, real {r}"
-                            for x, y, b, p, r in bad[:12]
-                        ],
+                        "over": over, "missed": missed, "wrong": wrong,
+                        # structured [x, y, was, predicted, real] for the
+                        # ANALYZE `backtest` variable — never rendered as
+                        # per-cell text into the prompt (pixel values in
+                        # context tempt the model into counting characters)
+                        "cells": [list(c) for c in bad[:400]],
                     })
                 else:
                     mismatches.append({"step_i": ev["i"], "kind": "grid", "n_cells": len(bad)})
@@ -121,7 +118,7 @@ def cmd_backtest(ns, segments):
     return {
         "ok": len(all_mismatches) == 0,
         "transitions_checked": total_checked,
-        "mismatches": all_mismatches[:8],
+        "mismatches": all_mismatches[:64],
         "n_mismatches": len(all_mismatches),
         "total_wrong_cells": sum(m.get("n_cells", 0) for m in all_mismatches)
         + sum(50 for m in all_mismatches if m.get("kind") == "goal"),
@@ -189,6 +186,7 @@ def cmd_analyze(code_path, timeline_path):
     """
     import contextlib
     import io
+    import os
 
     from harness import vision
 
@@ -196,8 +194,19 @@ def cmd_analyze(code_path, timeline_path):
         events = [json.loads(line) for line in f if line.strip()]
     with open(code_path) as f:
         code = f.read()
+    # latest backtest report, structured — the ONLY route to per-cell
+    # mismatch ground truth (reports in the prompt carry aggregates only)
+    backtest = None
+    bt_file = os.path.join(os.path.dirname(timeline_path), "backtest.json")
+    if os.path.exists(bt_file):
+        try:
+            with open(bt_file) as f:
+                backtest = json.load(f)
+        except Exception:
+            pass
     g = {
         "events": events,
+        "backtest": backtest,
         "components": vision.components,
         "describe": vision.describe,
         "flow": vision.flow,
