@@ -48,6 +48,9 @@ try clicks.
 2. PLAN
 Run breadth-first search inside your world model from the current state to a \
 goal state. Only useful when the backtest is GREEN — a wrong model finds wrong plans. \
+The harness also runs this automatically every time your backtest turns GREEN and \
+shows you the result: a found plan is one `COMMIT PLAN` away, and "no goal reachable" \
+means your is_goal is wrong or untested — treat that as a mismatch to explain. \
 Every pixel is deterministic and modelable, including HUD elements like counters \
 and fonts: if a few stubborn cells keep the backtest RED, decode them from the \
 recorded history instead of giving up on planning.
@@ -79,6 +82,10 @@ changes your world model or the game.
 
 You may also include lines starting with `NOTE: ` anywhere — they are appended to \
 your persistent notes.
+You also maintain ONE standing goal hypothesis, shown to you every turn. Restate it \
+with a `GOAL: <what completes the level, and your evidence>` line whenever evidence \
+changes it — a refuted goal theory you keep acting on wastes every action it spends. \
+is_goal in your world model must implement your stated GOAL.
 
 METHOD — follow this discipline strictly:
 - First look at the grid and name the objects you see in a NOTE.

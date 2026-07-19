@@ -17,6 +17,7 @@ COMMIT_RE = re.compile(r"^\s*COMMIT:\s*(.+?)\s*$", re.M)
 COMMIT_PLAN_RE = re.compile(r"^\s*COMMIT PLAN\s*$", re.M)
 PLAN_RE = re.compile(r"^\s*PLAN\s*$", re.M)
 NOTE_RE = re.compile(r"^\s*NOTE:\s*(.+?)\s*$", re.M)
+GOAL_RE = re.compile(r"^\s*GOAL:\s*(.+?)\s*$", re.M)
 ANALYZE_RE = re.compile(r"^\s*ANALYZE\s*$", re.M)
 ACTION_TOKEN_RE = re.compile(r"^(RESET|[123457]|6@\d{1,2},\d{1,2})$")
 
@@ -323,7 +324,8 @@ class Agent:
             # resumed run: evaluate the current model so a green backtest
             # (and PLAN availability) survives the restart
             rep = run_worker("backtest", self.model_path, self.timeline.path)
-            self.backtest_green = bool(rep.get("ok"))
+            self.backtest_green = (bool(rep.get("ok"))
+                                   and rep.get("transitions_checked", 0) > 0)
             if rep.get("total_wrong_cells") is not None:
                 self.last_score = rep["total_wrong_cells"]
 
@@ -401,6 +403,10 @@ class Agent:
     def notes(self):
         return self.notes_path.read_text() if self.notes_path.exists() else "(empty)"
 
+    def goal(self):
+        p = self.run_dir / "goal.md"
+        return p.read_text().strip() if p.exists() else ""
+
     def world_model(self):
         return self.model_path.read_text() if self.model_path.exists() else None
 
@@ -409,9 +415,14 @@ class Agent:
         # across deliberations: static header, then append-only notes, then the
         # slow-changing world model, then everything that changes every turn.
         cur = self.timeline.events[-1]
+        goal = self.goal()
         parts = [
             action_semantics(self.env.available_actions),
             f"YOUR NOTES (notes.md, append-only):\n{self.notes()}",
+            "YOUR CURRENT GOAL HYPOTHESIS (rewrite with a `GOAL: ...` line "
+            "whenever evidence changes it):\n"
+            + (goal or "(none stated yet — every game has a win condition; state "
+                       "your best guess with a GOAL: line and design probes to test it)"),
         ]
         wm = self.world_model()
         if wm:
@@ -474,12 +485,21 @@ class Agent:
             self._last_wm_delta = (len(code.splitlines()), 0)
         self.model_path.write_text(code)
         rep = run_worker("backtest", self.model_path, self.timeline.path)
-        self.backtest_green = bool(rep.get("ok"))
+        # a green on zero transitions is vacuous — it must not unlock PLAN
+        self.backtest_green = bool(rep.get("ok")) and rep.get("transitions_checked", 0) > 0
         self.log("backtest", rep)
+        if rep.get("ok") and not self.backtest_green:
+            return ("world_model.py saved, but there are NO recorded transitions yet — "
+                    "the backtest is vacuous and proves nothing. Probe reality first "
+                    "(`COMMIT: <action>`).")
         if self.backtest_green:
+            # green converts into search immediately: run BFS unprompted so
+            # is_goal is confronted with reachability every single time
+            plan_report = self.do_plan()
             return (f"world_model.py saved. backtest GREEN: "
-                    f"{rep.get('transitions_checked', 0)} recorded transitions reproduced exactly. "
-                    f"You may PLAN now.")
+                    f"{rep.get('transitions_checked', 0)} recorded transitions reproduced exactly.\n"
+                    f"AUTO-PLAN (the harness runs BFS whenever your model goes green):\n"
+                    f"{plan_report}")
         if "error" in rep:
             return f"world_model.py saved, but backtest FAILED to run:\n{rep['error']}"
         score = rep.get("total_wrong_cells")
@@ -697,6 +717,9 @@ class Agent:
             for note in NOTE_RE.findall(text):
                 with open(self.notes_path, "a") as f:
                     f.write(note + "\n")
+            goals = GOAL_RE.findall(text)
+            if goals:  # GOAL replaces (a hypothesis is revised, not appended to)
+                (self.run_dir / "goal.md").write_text(goals[-1] + "\n")
         code_blocks = CODE_RE.findall(text)
         # an ANALYZE line claims the code block for read-only analysis, not the model
         if code_blocks and ANALYZE_RE.search(text):
