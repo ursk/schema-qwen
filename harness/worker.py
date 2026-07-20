@@ -107,6 +107,83 @@ def fold_segment(ns, seg, check=True, max_report=64):
     return state, mismatches, checked, bad_xy
 
 
+def mismatch_digest(mismatches, max_lines=14):
+    """Deterministic auto-analysis of RED backtests: wrong cells grouped into
+    connected blocks with a 'color story' each, plus cross-step recurrence and
+    movement. The eye-level tabulation a competent ANALYZE call would print —
+    pushed by the harness because the model reads what it's handed but never
+    initiates tool use. Never emits raw per-cell dumps.
+    """
+    from collections import Counter, defaultdict
+
+    def components(cells):
+        pts = {(x, y): (b, p, r) for x, y, b, p, r in cells}
+        seen, comps = set(), []
+        for xy in pts:
+            if xy in seen:
+                continue
+            stack, comp = [xy], []
+            seen.add(xy)
+            while stack:
+                x, y = stack.pop()
+                comp.append((x, y))
+                for nb in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                    if nb in pts and nb not in seen:
+                        seen.add(nb)
+                        stack.append(nb)
+            comps.append(comp)
+        return pts, comps
+
+    def summarize(pts, comp):
+        xs = [x for x, y in comp]
+        ys = [y for x, y in comp]
+        story = Counter()
+        for xy in comp:
+            b, p, r = pts[xy]
+            if r == b:
+                story[f"you painted {p}, reality kept {b}"] += 1
+            elif p == b:
+                story[f"you kept {b}, reality painted {r}"] += 1
+            else:
+                story[f"was {b}: you painted {p}, reality painted {r}"] += 1
+        return {"n": len(comp), "w": max(xs) - min(xs) + 1, "h": max(ys) - min(ys) + 1,
+                "x": min(xs), "y": min(ys), "story": story.most_common(1)[0][0]}
+
+    lines, occs = [], []
+    for m in mismatches:
+        if m.get("kind") != "grid" or not m.get("cells"):
+            continue
+        pts, comps = components([tuple(c) for c in m["cells"]])
+        digs = sorted((summarize(pts, c) for c in comps), key=lambda d: -d["n"])
+        blocks = "; ".join(
+            f"{d['w']}x{d['h']} block at ({d['x']},{d['y']}): {d['story']}"
+            for d in digs[:4])
+        extra = f" (+{len(digs) - 4} smaller blocks)" if len(digs) > 4 else ""
+        lines.append(f"step {m['step_i']} (action {m['action']}): "
+                     f"{m['n_cells']} wrong cells — {blocks}{extra}")
+        for d in digs[:6]:
+            occs.append((m.get("action"), m["step_i"], d))
+
+    groups = defaultdict(list)
+    for a, si, d in occs:
+        groups[(a, d["w"], d["h"], d["story"])].append((si, d["x"], d["y"]))
+    for (a, w, h, story), oc in sorted(groups.items(),
+                                       key=lambda kv: -len(kv[1])):
+        if len(oc) < 2:
+            continue
+        oc.sort()
+        dxs = {oc[i + 1][1] - oc[i][1] for i in range(len(oc) - 1)}
+        dys = {oc[i + 1][2] - oc[i][2] for i in range(len(oc) - 1)}
+        move = (f", top-left moving ({dxs.pop():+d},{dys.pop():+d}) per occurrence"
+                if len(dxs) == 1 and len(dys) == 1 and (dxs != {0} or dys != {0})
+                else f", at x={[x for _, x, _ in oc]} y={[y for _, _, y in oc]}")
+        lines.append(f"PATTERN: the same {w}x{h} block ({story}) recurs in "
+                     f"{len(oc)} mismatched action-{a} steps{move}")
+    if len(lines) > max_lines:
+        lines = lines[:max_lines] + [f"...[{len(lines) - max_lines} more digest lines omitted]"]
+    return lines
+
+
 def cmd_backtest(ns, segments):
     total_checked, all_mismatches = 0, []
     all_bad_xy = set()
@@ -119,6 +196,7 @@ def cmd_backtest(ns, segments):
         "ok": len(all_mismatches) == 0,
         "transitions_checked": total_checked,
         "mismatches": all_mismatches[:64],
+        "digest": mismatch_digest(all_mismatches[:64]),
         "n_mismatches": len(all_mismatches),
         "total_wrong_cells": sum(m.get("n_cells", 0) for m in all_mismatches)
         + sum(50 for m in all_mismatches if m.get("kind") == "goal"),

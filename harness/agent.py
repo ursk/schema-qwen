@@ -574,23 +574,22 @@ class Agent:
                 f"counter? a HUD glyph?) is deterministic and CAN be modeled — decode "
                 f"it from the recorded history to reach GREEN. It may even encode the goal."
             )
-        # regions and counts only — never per-cell values (they tempt the
-        # model into hand-counting grid text; ground truth lives in ANALYZE)
+        # goal-kind mismatches have no cells; render their detail directly
         for m in mm[:8]:
-            if m.get("kind") == "grid":
-                where = f" in {bbox(m['cells'])}" if m.get("cells") else ""
-                lines.append(
-                    f"- step {m.get('step_i')} (action {m.get('action')}): "
-                    f"{m.get('n_cells')} wrong cells{where} — "
-                    f"{m.get('over', 0)} you changed but reality didn't, "
-                    f"{m.get('missed', 0)} reality changed but you didn't, "
-                    f"{m.get('wrong', 0)} both changed differently")
-            else:
+            if m.get("kind") != "grid":
                 lines.append(f"- step {m.get('step_i')} (action {m.get('action')}): {m.get('detail')}")
+        # AUTO-ANALYZE: the harness tabulates the wrong cells (blocks, color
+        # stories, recurring patterns) — regions only, never per-cell values
+        # (they tempt the model into hand-counting grid text)
+        digest = rep.get("digest") or []
+        if digest:
+            lines.append("AUTO-ANALYZE (the harness tabulates the wrong cells whenever "
+                         "the backtest is RED):")
+            lines.extend(f"- {d}" for d in digest)
         lines.append(
             "No cell values are listed on purpose — do NOT re-read the grid text to "
-            "recover them. Run ANALYZE and print what you need: the full mismatch "
-            "array is available there as `backtest` "
+            "recover them. For anything beyond this tabulation, run ANALYZE and print "
+            "what you need: the full mismatch array is available there as `backtest` "
             "(mismatches[i]['cells'] = [[x, y, was, predicted, real], ...]).")
         lines.append("Revise init_state/step/render (or is_goal) to explain these, then resubmit.")
         if self.timeline.action_count < 12:

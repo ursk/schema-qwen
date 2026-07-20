@@ -38,8 +38,11 @@ def is_goal(state):
     ...
 ```
 The harness saves it and immediately backtests it against EVERY recorded transition. \
-You will get either "backtest GREEN" or a summary of mismatching steps — counts and \
-regions only, never per-cell values (inspect those via ANALYZE's `backtest` array). \
+You will get either "backtest GREEN" or an AUTO-ANALYZE tabulation of the mismatches: \
+wrong cells grouped into blocks with what happened in each ("you kept 3, reality \
+painted 12"), plus recurring cross-step patterns and movement. Trust it — it is \
+computed, not eyeballed. Never per-cell values (inspect those via ANALYZE's \
+`backtest` array if you must). \
 State can be any JSON-able structure — invent whatever variables the game needs \
 (positions, counters, budgets), and keep only what matters; a state that is just \
 the raw grid usually cannot capture hidden variables.
