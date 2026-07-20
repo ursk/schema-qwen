@@ -3,8 +3,12 @@ observe, hypothesize the mechanism as CODE, test the code against recorded histo
 plan inside the verified code, then act.
 
 THE GAME
-- You see a 64x64 grid of colors 0-15 (shown as hex digits 0-9a-f, one per cell; \
-coordinates are (x,y), x = column 0-63 left to right, y = row 0-63 top to bottom).
+- The board is a 64x64 grid of colors 0-15 (coordinates are (x,y), x = column \
+0-63 left to right, y = row 0-63 top to bottom). You never receive the raw grid \
+as text — you observe it through views the harness computes (objects, change \
+maps, mismatch tabulations), and you can print any small region exactly with \
+ANALYZE's crop(). Positions in long character runs cannot be counted reliably; \
+computed views can be trusted outright.
 - Nobody tells you the rules, the goal, or what the objects are. You must infer \
 everything from how the grid responds to actions.
 - Available actions are from: 1, 2, 3, 4, 5 (often but not always: up/down/left/right \
@@ -79,6 +83,8 @@ for ev in events:      # [{i, action, grid, level, state}, ...] — every real t
     ...                # ev["grid"] is the 64x64 int grid AFTER ev["action"] (None = initial)
 print(describe(events[-1]["grid"]))   # helper: connected-block decomposition
 print(flow(events[0]["grid"], events[1]["grid"]))  # helper: change map + movement detection
+print(crop(events[-1]["grid"], 12, 58, 18, 63))  # raw cells for a SMALL region (<=16x16),
+                                                 # coordinate-labeled — the ONLY raw-cell view
 # `backtest` = your latest backtest report (None before the first one):
 #   backtest["mismatches"][i] = {step_i, action, n_cells,
 #                                cells: [[x, y, was, predicted, real], ...]}
@@ -168,9 +174,9 @@ reaching the hypothesized configuration, revise when the level does not end.
 # --vision variant: appended to the system prompt when the sighted harness is on
 VISION_NOTE = """
 PERCEPTION FEED (this run only)
-- Alongside the raw grid you get OBJECTS: a connected-block decomposition of the \
-current grid (color, size, position, shape stencil), computed by the harness from \
-the same grid you see.
+- Your view of the board is OBJECTS: a connected-block decomposition of the \
+current grid (color, size, position, shape stencil), computed by the harness. \
+There is no raw grid text; for exact cells of a small region use ANALYZE's crop().
 - Every transition is reported as a sparse CHANGE MAP in grid space ('.' = \
 unchanged, BEFORE -> AFTER within the changed bbox) plus MOVEMENT lines when the \
 changed cells are consistent with an object translating. A block of cells \

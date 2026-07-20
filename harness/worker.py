@@ -282,12 +282,32 @@ def cmd_analyze(code_path, timeline_path):
                 backtest = json.load(f)
         except Exception:
             pass
+    def crop(grid, x0, y0, x1, y1):
+        """Raw cells for a SMALL region (<=16x16) as coordinate-labeled text —
+        the only sanctioned raw-cell view. Ask for exactly the region you need;
+        full-grid text is banned because positions in long runs can't be counted.
+        """
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(63, x1), min(63, y1)
+        if x1 < x0 or y1 < y0:
+            return "crop refused: empty region"
+        if x1 - x0 + 1 > 16 or y1 - y0 + 1 > 16:
+            return "crop refused: keep the region <= 16x16 (that is the point)"
+        head = "y\\x " + " ".join(f"{x:2d}" for x in range(x0, x1 + 1))
+        rows = [head] + [
+            f"{y:3d} " + " ".join(f"{vision.HEX[grid[y][x] & 15]:>2}"
+                                  for x in range(x0, x1 + 1))
+            for y in range(y0, y1 + 1)
+        ]
+        return "\n".join(rows)
+
     g = {
         "events": events,
         "backtest": backtest,
         "components": vision.components,
         "describe": vision.describe,
         "flow": vision.flow,
+        "crop": crop,
         "HEX": vision.HEX,
     }
     buf = io.StringIO()

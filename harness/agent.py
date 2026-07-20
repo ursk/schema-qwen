@@ -7,7 +7,7 @@ from pathlib import Path
 
 import httpx
 
-from .grids import grid_to_text, diff_summary
+from .grids import diff_summary
 from .prompts import SYSTEM, action_semantics
 from .vision import describe as vision_describe, flow as vision_flow
 from .sandbox import run_worker
@@ -490,10 +490,18 @@ class Agent:
             f"{self.env.state} · {self.timeline.action_count} actions taken so far · "
             f"backtest {bt}"
         )
-        parts.append(f"CURRENT GRID (hex colors, x -> right, y -> down):\n{grid_to_text(cur['grid'])}")
+        # raw hex dumps NEVER go in the prompt (Urs, 2026-07-19): runs of
+        # identical characters merge into single tokens, so the model cannot
+        # count positions in grid text — it only spirals trying. The board is
+        # observed through computed views; raw cells via ANALYZE crop() only.
         if self.vision:
             parts.append("OBJECTS (connected-block decomposition of the current "
-                         f"grid, computed by the harness):\n{vision_describe(cur['grid'])}")
+                         f"grid, computed by the harness — your view of the board):\n"
+                         f"{vision_describe(cur['grid'])}")
+        else:
+            parts.append("CURRENT GRID: not shown as text. Inspect it via ANALYZE — "
+                         "events[-1]['grid'], describe(), or crop() for a small "
+                         "labeled region.")
         if extra:
             parts.append(extra)
         parts.append("Decide your next command.")
