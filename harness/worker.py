@@ -255,6 +255,70 @@ def cmd_bfs(ns, segments, args):
             "note": "no goal state found within search limits"}
 
 
+def crop_text(grid, x0, y0, x1, y1):
+    """Raw cells for a SMALL region (<=16x16) as coordinate-labeled text —
+    the only sanctioned raw-cell view. Ask for exactly the region you need;
+    full-grid text is banned because positions in long runs can't be counted.
+    """
+    from harness import vision
+
+    x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(63, x1), min(63, y1)
+    if x1 < x0 or y1 < y0:
+        return "crop refused: empty region"
+    if x1 - x0 + 1 > 16 or y1 - y0 + 1 > 16:
+        return "crop refused: keep the region <= 16x16 (that is the point)"
+    head = "y\\x " + " ".join(f"{x:2d}" for x in range(x0, x1 + 1))
+    rows = [head] + [
+        f"{y:3d} " + " ".join(f"{vision.HEX[grid[y][x] & 15]:>2}"
+                              for x in range(x0, x1 + 1))
+        for y in range(y0, y1 + 1)
+    ]
+    return "\n".join(rows)
+
+
+def _helper_globals():
+    """The shared code-space perception surface for ANALYZE and sense.py."""
+    from harness import vision
+
+    return {
+        "components": vision.components,
+        "describe": vision.describe,
+        "flow": vision.flow,
+        "crop": crop_text,
+        "HEX": vision.HEX,
+    }
+
+
+def cmd_sense(code_path, timeline_path):
+    """Run the model-OWNED perception module: sense(events) -> str.
+
+    The harness calls this every turn; its output is the model's entire
+    view of the board. Crash -> {"ok": False, "error": ...} and the agent
+    falls back to the last working version.
+    """
+    import contextlib
+    import io
+
+    with open(timeline_path) as f:
+        events = [json.loads(line) for line in f if line.strip()]
+    with open(code_path) as f:
+        code = f.read()
+    g = _helper_globals()
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            exec(compile(code, "sense.py", "exec"), g)
+            if "sense" not in g or not callable(g["sense"]):
+                return {"ok": False, "error": "sense.py must define sense(events) -> str"}
+            out = str(g["sense"](events))
+    except Exception:
+        return {"ok": False, "error": traceback.format_exc(limit=4)}
+    if len(out) > 5000:
+        out = out[:5000] + "\n...[sense output truncated at 5000 chars — keep your view compact]"
+    return {"ok": True, "text": out}
+
+
 def cmd_analyze(code_path, timeline_path):
     """Run agent-written analysis code READ-ONLY over the timeline; return stdout.
 
@@ -282,33 +346,10 @@ def cmd_analyze(code_path, timeline_path):
                 backtest = json.load(f)
         except Exception:
             pass
-    def crop(grid, x0, y0, x1, y1):
-        """Raw cells for a SMALL region (<=16x16) as coordinate-labeled text —
-        the only sanctioned raw-cell view. Ask for exactly the region you need;
-        full-grid text is banned because positions in long runs can't be counted.
-        """
-        x0, y0 = max(0, x0), max(0, y0)
-        x1, y1 = min(63, x1), min(63, y1)
-        if x1 < x0 or y1 < y0:
-            return "crop refused: empty region"
-        if x1 - x0 + 1 > 16 or y1 - y0 + 1 > 16:
-            return "crop refused: keep the region <= 16x16 (that is the point)"
-        head = "y\\x " + " ".join(f"{x:2d}" for x in range(x0, x1 + 1))
-        rows = [head] + [
-            f"{y:3d} " + " ".join(f"{vision.HEX[grid[y][x] & 15]:>2}"
-                                  for x in range(x0, x1 + 1))
-            for y in range(y0, y1 + 1)
-        ]
-        return "\n".join(rows)
-
     g = {
         "events": events,
         "backtest": backtest,
-        "components": vision.components,
-        "describe": vision.describe,
-        "flow": vision.flow,
-        "crop": crop,
-        "HEX": vision.HEX,
+        **_helper_globals(),
     }
     buf = io.StringIO()
     err = None
@@ -349,6 +390,10 @@ def main():
         if cmd == "analyze":
             # analysis code needs no world model — model_path is the code file
             print(json.dumps(cmd_analyze(model_path, timeline_path)))
+            return
+        if cmd == "sense":
+            # perception module needs no world model — model_path is sense.py
+            print(json.dumps(cmd_sense(model_path, timeline_path)))
             return
         ns = load_model(model_path)
         segments = Timeline(timeline_path).segments()

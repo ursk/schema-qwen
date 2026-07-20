@@ -9,7 +9,7 @@ import httpx
 
 from .grids import diff_summary
 from .prompts import SYSTEM, action_semantics
-from .vision import describe as vision_describe, flow as vision_flow
+from .vision import flow as vision_flow
 from .sandbox import run_worker
 
 CODE_RE = re.compile(r"```python\s*\n(.*?)```", re.S)
@@ -19,6 +19,7 @@ PLAN_RE = re.compile(r"^\s*PLAN\s*$", re.M)
 NOTE_RE = re.compile(r"^\s*NOTE:\s*(.+?)\s*$", re.M)
 GOAL_RE = re.compile(r"^\s*GOAL:\s*(.+?)\s*$", re.M)
 ANALYZE_RE = re.compile(r"^\s*ANALYZE\s*$", re.M)
+SENSE_RE = re.compile(r"^\s*SENSE\s*$", re.M)
 ACTION_TOKEN_RE = re.compile(r"^(RESET|[123457]|6@\d{1,2},\d{1,2})$")
 
 
@@ -347,6 +348,14 @@ class Agent:
         self.backtest_green = False
         self.recent_events = []  # (action, summary) since last context rebuild
         self.best_path = self.run_dir / "world_model_best.py"
+        # model-owned perception module (vision runs): the harness runs
+        # sense(events) every turn and its output IS the model's view.
+        # Seeded from the starter kit; sense_ok.py = last version that ran.
+        self.sense_path = self.run_dir / "sense.py"
+        self.sense_ok_path = self.run_dir / "sense_ok.py"
+        if self.vision and not self.sense_path.exists():
+            self.sense_path.write_text(
+                (Path(__file__).parent / "sense_starter.py").read_text())
         self.best_score = None  # lowest total_wrong_cells seen
         self.best_scored_len = -1  # action_count when best_score was computed
         self.last_score = None  # score of the currently saved world_model.py
@@ -463,7 +472,10 @@ class Agent:
             parts.append(f"YOUR WORLD MODEL (world_model.py):\n```python\n{wm}```")
         else:
             parts.append("YOU HAVE NO WORLD MODEL YET.")
-        if self.recent_events:
+        # vision runs: recent transitions are rendered by the model's own
+        # sense.py (which sees the full history); the harness-side rendering
+        # below remains only for the blind arm
+        if self.recent_events and not self.vision:
             lines = []
             recent = self.recent_events[-20:]
             for j, (a, s) in enumerate(recent):
@@ -492,12 +504,12 @@ class Agent:
         )
         # raw hex dumps NEVER go in the prompt (Urs, 2026-07-19): runs of
         # identical characters merge into single tokens, so the model cannot
-        # count positions in grid text — it only spirals trying. The board is
-        # observed through computed views; raw cells via ANALYZE crop() only.
+        # count positions in grid text — it only spirals trying. In vision
+        # runs the entire view is produced by the MODEL-OWNED sense.py.
         if self.vision:
-            parts.append("OBJECTS (connected-block decomposition of the current "
-                         f"grid, computed by the harness — your view of the board):\n"
-                         f"{vision_describe(cur['grid'])}")
+            parts.append("PERCEPTION (output of YOUR sense.py, run by the harness "
+                         "over the full history — rewrite it with SENSE if it "
+                         "hides what you need):\n" + self.run_sense())
         else:
             parts.append("CURRENT GRID: not shown as text. Inspect it via ANALYZE — "
                          "events[-1]['grid'], describe(), or crop() for a small "
@@ -607,6 +619,41 @@ class Agent:
                 f"constrains the rule far more than another rewrite. Try each untested action once."
             )
         return "\n".join(lines)
+
+    def run_sense(self):
+        """Run the model-owned perception module with last-known-good fallback."""
+        rep = run_worker("sense", self.sense_path, self.timeline.path)
+        if rep.get("ok"):
+            if (not self.sense_ok_path.exists()
+                    or self.sense_ok_path.read_text() != self.sense_path.read_text()):
+                self.sense_ok_path.write_text(self.sense_path.read_text())
+            return rep["text"]
+        err = (rep.get("error") or "unknown failure").strip()
+        if (self.sense_ok_path.exists()
+                and self.sense_ok_path.read_text() != self.sense_path.read_text()):
+            fallback = run_worker("sense", self.sense_ok_path, self.timeline.path)
+            if fallback.get("ok"):
+                return (f"(your latest sense.py CRASHES — showing the last working "
+                        f"version instead; fix it with a SENSE command)\n"
+                        f"[crash]\n{err}\n\n" + fallback["text"])
+        return (f"(sense.py FAILED — you are flying blind this turn; fix it with a "
+                f"SENSE command, or inspect the board via ANALYZE)\n[crash]\n{err}")
+
+    def do_sense(self, code):
+        """Install a model-written sense.py after validating it on the history."""
+        if "def sense" not in code:
+            return ("SENSE rejected: the code block must define sense(events) -> str. "
+                    "Your current sense.py is unchanged.")
+        cand = self.run_dir / "_sense_candidate.py"
+        cand.write_text(code)
+        rep = run_worker("sense", cand, self.timeline.path)
+        cand.unlink(missing_ok=True)
+        if not rep.get("ok"):
+            return ("SENSE rejected — the new sense(events) crashed on the current "
+                    f"history; your old sense.py is unchanged:\n{rep.get('error')}")
+        self.sense_path.write_text(code)
+        self.log("sense", {"chars": len(code)})
+        return "sense.py updated. Your view is now:\n" + rep.get("text", "")
 
     def do_analyze(self, code):
         """Run agent-written analysis code read-only over the timeline."""
@@ -783,6 +830,9 @@ class Agent:
             if goals:  # GOAL replaces (a hypothesis is revised, not appended to)
                 (self.run_dir / "goal.md").write_text(goals[-1] + "\n")
         code_blocks = CODE_RE.findall(text)
+        # a SENSE line claims the code block as the new perception module
+        if code_blocks and SENSE_RE.search(text):
+            return "sense", code_blocks[-1]
         # an ANALYZE line claims the code block for read-only analysis, not the model
         if code_blocks and ANALYZE_RE.search(text):
             return "analyze", code_blocks[-1]
@@ -868,6 +918,8 @@ class Agent:
                 result = self.do_write_model(payload)
             elif kind == "analyze":
                 result = self.do_analyze(payload)
+            elif kind == "sense":
+                result = self.do_sense(payload)
             elif kind == "plan":
                 result = self.do_plan()
             elif kind == "commit_plan":

@@ -97,6 +97,15 @@ changes your world model or the game. When you need ground truth about specific 
 cells, ALWAYS print it here from `events` or `backtest` — never count characters \
 in the grid text by hand; hand-counted indices are how you get stuck.
 
+7. SENSE — a line `SENSE` followed by a python code block defining \
+sense(events) -> str: replaces your PERCEPTION module. The harness runs \
+sense(events) every turn and what it returns is your entire view of the board \
+(same helpers as ANALYZE: describe, flow, components, crop, HEX; output capped \
+at 5000 chars). Use SENSE when your current view keeps hiding something you \
+need — ANALYZE answers a one-off question, SENSE changes what you see every \
+turn from now on. The harness validates the new module on the recorded history \
+and keeps your old one if it crashes.
+
 You may also include lines starting with `NOTE: ` anywhere — they are appended to \
 your persistent notes.
 You also maintain ONE standing goal hypothesis, shown to you every turn. Restate it \
@@ -174,16 +183,21 @@ reaching the hypothesized configuration, revise when the level does not end.
 # --vision variant: appended to the system prompt when the sighted harness is on
 VISION_NOTE = """
 PERCEPTION FEED (this run only)
-- Your view of the board is OBJECTS: a connected-block decomposition of the \
-current grid (color, size, position, shape stencil), computed by the harness. \
-There is no raw grid text; for exact cells of a small region use ANALYZE's crop().
-- Every transition is reported as a sparse CHANGE MAP in grid space ('.' = \
-unchanged, BEFORE -> AFTER within the changed bbox) plus MOVEMENT lines when the \
-changed cells are consistent with an object translating. A block of cells \
-vanishing at one place and an identical block appearing nearby IS an object \
-moving — treat detected movement as strong evidence.
-- These are exact, deterministic computations on your own observations. Build \
-your world model in terms of the objects they reveal, not individual cells.
+- Your view of the board is produced by YOUR OWN perception module, sense.py: \
+the harness runs sense(events) every turn and shows you its output. There is \
+no raw grid text; for exact cells of a small region use ANALYZE's crop().
+- sense.py starts as a reasonable default: OBJECTS (a connected-block \
+decomposition of the current frame — color, size, position, shape stencil) \
+plus CHANGE MAP / MOVEMENT summaries of recent transitions ('.' = unchanged, \
+BEFORE -> AFTER within the changed bbox; a block vanishing at one place and an \
+identical block appearing nearby IS an object moving — treat detected movement \
+as strong evidence). These are exact, deterministic computations on your own \
+observations. Build your world model in terms of the objects they reveal, not \
+individual cells.
+- The default view is a starting point, not an oracle of what matters. If it \
+keeps hiding what you need — a counter region, fine texture, diagonal structure \
+— REWRITE IT with a SENSE command (command 7). Your eyes are code; improving \
+them is part of playing well.
 """
 
 SYSTEM_COACHED = SYSTEM.replace(
